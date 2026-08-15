@@ -10,11 +10,13 @@
 namespace nq {
 
 // Price-time-priority limit order book for one instrument, rebuilt by
-// replaying an order-by-order feed. Orders live in a nlib::hive, whose stable
-// addresses let an intrusive doubly linked list per side hold them best price
-// first and arrival order within a price; a nlib::map from order id to node
-// makes trades and cancels O(1) lookups. The book does not match: crossing
-// orders rest until the feed reports their trades.
+// replaying an order-by-order feed. Feed records are the book nodes: each
+// resting nlib::order is copied into a nlib::hive, whose stable addresses let
+// the order's own prev/next hooks chain one intrusive list per side, best
+// price first and arrival order within a price; a nlib::map from order id to
+// order makes trades and cancels O(1) lookups. The stored copy's qty tracks
+// the remaining quantity. The book does not match: crossing orders rest until
+// the feed reports their trades.
 class Orderbook {
  public:
   // Rests a limit-order add on its side of the book. Anything else is
@@ -23,7 +25,7 @@ class Orderbook {
   void OnOrder(const nlib::order& o) {
     if (o.action != nlib::order_action::add || o.type != nlib::order_type::limit) return;
     Touch(o.instrument_id, o.time_ns);
-    Node* n = &*orders_.emplace(Node{nullptr, nullptr, o.order_id, o.price, o.qty, o.side});
+    nlib::order* n = &*orders_.emplace(o);
     by_id_.try_emplace(std::int64_t{o.order_id}, n);
     Link(n);
   }
@@ -55,15 +57,6 @@ class Orderbook {
   }
 
  private:
-  struct Node {
-    Node* prev;
-    Node* next;
-    std::int64_t order_id;
-    std::int64_t price;
-    std::int64_t qty;  // remaining quantity
-    nlib::side side;
-  };
-
   void Touch(std::uint32_t instrument_id, std::int64_t time_ns) {
     instrument_id_ = instrument_id;
     time_ns_ = time_ns;
@@ -71,11 +64,11 @@ class Orderbook {
 
   // Links `n` behind every order of better or equal price priority, giving
   // price order across levels and arrival order within one.
-  void Link(Node* n) {
+  void Link(nlib::order* n) {
     const bool buy = n->side == nlib::side::buy;
-    Node*& head = buy ? bid_head_ : ask_head_;
-    Node* prev = nullptr;
-    Node* cur = head;
+    nlib::order*& head = buy ? bid_head_ : ask_head_;
+    nlib::order* prev = nullptr;
+    nlib::order* cur = head;
     while (cur && (buy ? cur->price >= n->price : cur->price <= n->price)) {
       prev = cur;
       cur = cur->next;
@@ -87,14 +80,14 @@ class Orderbook {
   }
 
   // Shrinks order `order_id` by `qty`; at zero remaining, unlinks it and
-  // frees its node and id entry. Unknown ids are ignored.
+  // frees its storage and id entry. Unknown ids are ignored.
   void Reduce(std::int64_t order_id, std::int64_t qty) {
     const auto it = by_id_.find(order_id);
     if (it == by_id_.end()) return;
-    Node* n = it->second;
+    nlib::order* n = it->second;
     n->qty -= qty;
     if (n->qty > 0) return;
-    Node*& head = (n->side == nlib::side::buy) ? bid_head_ : ask_head_;
+    nlib::order*& head = (n->side == nlib::side::buy) ? bid_head_ : ask_head_;
     (n->prev ? n->prev->next : head) = n->next;
     if (n->next) n->next->prev = n->prev;
     by_id_.erase(it);
@@ -103,18 +96,18 @@ class Orderbook {
 
   // Writes up to nlib::book_depth (price, summed qty) levels from one side's
   // list; trailing levels stay zero.
-  static void FillSide(const Node* n, std::int64_t* price, std::int64_t* qty) {
+  static void FillSide(const nlib::order* n, std::int64_t* price, std::int64_t* qty) {
     for (std::size_t lvl = 0; n && lvl < nlib::book_depth; ++lvl) {
       price[lvl] = n->price;
       for (; n && n->price == price[lvl]; n = n->next) qty[lvl] += n->qty;
     }
   }
 
-  nlib::hive<Node> orders_;
-  nlib::map<std::int64_t, Node*> by_id_;
-  Node* bid_head_ = nullptr;  // highest bid first
-  Node* ask_head_ = nullptr;  // lowest ask first
-  std::int64_t time_ns_ = 0;  // latest event time
+  nlib::hive<nlib::order> orders_;
+  nlib::map<std::int64_t, nlib::order*> by_id_;
+  nlib::order* bid_head_ = nullptr;  // highest bid first
+  nlib::order* ask_head_ = nullptr;  // lowest ask first
+  std::int64_t time_ns_ = 0;         // latest event time
   std::uint32_t instrument_id_ = 0;
 };
 
