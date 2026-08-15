@@ -8,14 +8,15 @@ project(nqbook
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+add_subdirectory(nlib)
 
 add_executable(nqbook
     src/main.cpp
-    src/Orderbook.cpp
 )
 
-target_include_directories(nqbook PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+target_include_directories(nqbook PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+target_link_libraries(nqbook PRIVATE nlib::nlib)
