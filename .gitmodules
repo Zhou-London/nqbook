@@ -1,3 +1,3 @@
 [submodule "nlib"]
-	path = nlib
+	path = include/nlib
 	url = git@github.com:Zhou-London/nlib.git
