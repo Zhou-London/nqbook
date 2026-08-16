@@ -13,6 +13,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_subdirectory(include/nlib)
 
 add_executable(nqbook
+    src/Orderbook.cpp
     src/main.cpp
 )
 

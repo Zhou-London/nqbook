@@ -10,10 +10,14 @@ order book rebuilt from an order-by-order feed. See [README.md](README.md).
 ## Layout
 
 ```
-nlib/                  git submodule: header-only containers and wire types
-include/Orderbook.h    nq::Orderbook, header-only implementation
+include/nlib/          git submodule: header-only containers and wire types
+include/Orderbook.h    nq::Orderbook interface: the contract of every member
+src/Orderbook.cpp      its implementation
 src/main.cpp           smoke test: replays a small feed and prints the book
 ```
+
+Contracts live at the declarations in `Orderbook.h`; `Orderbook.cpp` comments
+mechanism only.
 
 Wire types (`nlib::order`, `nlib::trade`, `nlib::book`) come from
 `<nlib/common.h>` — never redefine them here. To change one, edit nlib itself,
@@ -27,6 +31,10 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ./build/nqbook
 ```
+
+A clone made before the submodule moved to `include/nlib` needs
+`git submodule sync` first; without it the old path stays checked out and the
+`add_subdirectory(include/nlib)` line fails to configure.
 
 Testing is the smoke test in `main.cpp`, checked by eye against the expected
 lines it prints — no gtest here (nlib carries the container test suites).
