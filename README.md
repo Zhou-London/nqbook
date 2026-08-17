@@ -10,9 +10,18 @@ Project of NowQuant.
 
 `nqbook` — the limit order book service. Namespace `nq`, C++23.
 
-A price-time-priority book for one instrument, rebuilt by replaying an
-order-by-order feed. It does not match: crossing orders rest until the feed
-reports their trades.
+A price-time-priority book for one instrument, rebuilt from an order-by-order
+feed. It does not match: crossing orders rest until the feed reports their
+trades.
+
+The process is a persistent three-thread pipeline, each pair of stages joined
+by one lock-free `nlib::single_queue`:
+
+| Thread | Does |
+|---|---|
+| feed | receives adapted wire records over a ZMQ SUB socket |
+| book | applies each event to `nq::Orderbook`, forwards it, snapshots every 3 s |
+| writer | batches records into Arrow and writes one Parquet file per type under `data_out/` |
 
 ## Shape
 
@@ -41,28 +50,82 @@ the remaining quantity.
 
 ```
 include/nlib/          nlib submodule: containers and wire types
-include/Orderbook.h    the interface — the contract of every member
+include/Orderbook.h    nq::Orderbook — the contract of every member
 src/Orderbook.cpp      its implementation
-src/main.cpp           smoke test: replays a small feed and prints the book
+include/Pipeline.h     the pipeline: queue types, wire framing, thread contracts
+src/Feed.cpp           feed thread: ZMQ SUB → FeedQueue
+src/Book.cpp           book thread: applies events, snapshots → RecordQueue
+src/Writer.cpp         writer thread: Arrow batches → Parquet files
+src/main.cpp           entry point: thread wiring and drain-ordered shutdown
 ```
 
-Every member's contract is documented at its declaration in `Orderbook.h`;
-the `.cpp` comments mechanism only. Read the header to use the book, the
-source to change it.
+Every contract is documented at its declaration in the headers; the `.cpp`
+files comment mechanism only. Read the headers to use a component, the
+sources to change one.
 
-## Building
+## Building and running
+
+C++ builds and runs in the `dev` container (built from
+`Dockerfiles/cpp-dev`); the feed simulator runs on the host with
+[uv](https://docs.astral.sh/uv/).
 
 ```bash
 git submodule update --init
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-./build/nqbook
+docker run --rm -v "$PWD":/work -w /work dev:latest bash -c \
+    'cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -G Ninja && cmake --build build -j'
 ```
 
-`nqbook` runs a small feed-replay smoke test and prints the book after each
-phase next to the expected lines.
+```bash
+# On the host: publish a repeated virtual order on tcp://*:5555.
+cd ../util && uv run feed_sim.py
+```
+
+```bash
+# In the container: receive it, book it, persist it.
+docker run --rm --add-host=host.docker.internal:host-gateway \
+    -v "$PWD":/work -w /work dev:latest ./build/nqbook
+```
+
+`nqbook [feed_endpoint] [out_dir]` defaults to
+`tcp://host.docker.internal:5555` (overridable via `NQBOOK_FEED_ENDPOINT`)
+and `data_out`. SIGINT or SIGTERM stops it; shutdown drains the queues
+upstream-first, so every received record reaches the Parquet files, one
+zstd-compressed file per record type stamped with the start time.
 
 ## Releases
+
+### v0.2.0 — 2026-08-17
+
+`nqbook` stopped being a smoke test and became a service: it now takes a live
+feed and persists everything it books.
+
+- **Three threads, two queues.** `Pipeline.h` declares the stage contracts —
+  feed, book, writer — and joins each pair with one `nlib::single_queue`
+  (SPSC), so the process runs lock-free end to end. A full queue makes the
+  producer wait rather than drop, so backpressure from storage reaches ZMQ.
+- **The feed is a ZMQ SUB socket.** Framing is one tag byte followed by the
+  record in host layout; anything that matches no tag-plus-size is dropped.
+  `order::prev` / `order::next` arrive as wire bytes and are discarded — the
+  hooks are book-owned state.
+- **Parquet persistence.** The writer keeps one sink per record type, buffers
+  1024 rows into Arrow builders, and writes each batch as one zstd-compressed
+  row group. Files land in `data_out/`, stamped with the writer start time,
+  with the Arrow schema embedded so readers restore the fixed-size lists in
+  `book`. A storage error aborts the process; running on without persistence
+  would lose data silently.
+- **Snapshots are on the wall clock**, every 3 s, whether or not the book saw
+  an event.
+- **Shutdown drains.** SIGINT or SIGTERM stops the stages upstream-first —
+  feed, then book, then writer — and each drains its input before returning,
+  so every received record reaches a file.
+- **Configuration** is `nqbook [feed_endpoint] [out_dir]`, with the endpoint
+  falling back to `NQBOOK_FEED_ENDPOINT` and then to
+  `tcp://host.docker.internal:5555`.
+- **The build needs Arrow, Parquet, and cppzmq**, which only the `dev`
+  container carries — the host can no longer configure this project.
+- **nlib bumped** to `84ee2cc`: `order::side` and `trade::side` are now
+  declared `nlib::side`, without which this repository does not compile under
+  GCC 13.
 
 ### v0.1.0 — 2026-08-16
 

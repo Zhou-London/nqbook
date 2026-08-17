@@ -4,8 +4,10 @@ Guidance for Claude Code when working in this repository.
 
 ## What this is
 
-`nqbook` — the limit order book service, C++23, namespace `nq`. A price-time
-order book rebuilt from an order-by-order feed. See [README.md](README.md).
+`nqbook` — the limit order book service, C++23, namespace `nq`. A persistent
+process: a ZMQ feed thread, a book thread (price-time order book, snapshot
+every 3 s), and an Arrow/Parquet writer thread, joined pairwise by lock-free
+`nlib::single_queue`s. See [README.md](README.md).
 
 ## Layout
 
@@ -13,10 +15,14 @@ order book rebuilt from an order-by-order feed. See [README.md](README.md).
 include/nlib/          git submodule: header-only containers and wire types
 include/Orderbook.h    nq::Orderbook interface: the contract of every member
 src/Orderbook.cpp      its implementation
-src/main.cpp           smoke test: replays a small feed and prints the book
+include/Pipeline.h     queue types, wire framing, and the three thread contracts
+src/Feed.cpp           feed thread: ZMQ SUB -> FeedQueue
+src/Book.cpp           book thread: applies events, forwards them, snapshots
+src/Writer.cpp         writer thread: batched Parquet under data_out/
+src/main.cpp           entry point: wiring and drain-ordered shutdown
 ```
 
-Contracts live at the declarations in `Orderbook.h`; `Orderbook.cpp` comments
+Contracts live at the declarations in the headers; the `.cpp` files comment
 mechanism only.
 
 Wire types (`nlib::order`, `nlib::trade`, `nlib::book`) come from
@@ -25,24 +31,35 @@ commit there, then bump the submodule pointer in this repo.
 
 ## Build
 
+C++ configures, builds, and runs only in the `dev` container (image built
+from `Dockerfiles/cpp-dev`, which carries Arrow/Parquet and ZMQ); the host
+has neither. The feed simulator (`apps/util/feed_sim.py`) runs on the
+host with uv.
+
 ```bash
 git submodule update --init
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-./build/nqbook
+docker run --rm -v "$PWD":/work -w /work dev:latest bash -c \
+    'cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -G Ninja && cmake --build build -j'
 ```
 
 A clone made before the submodule moved to `include/nlib` needs
 `git submodule sync` first; without it the old path stays checked out and the
 `add_subdirectory(include/nlib)` line fails to configure.
 
-Testing is the smoke test in `main.cpp`, checked by eye against the expected
-lines it prints — no gtest here (nlib carries the container test suites).
+Testing is end to end: run `uv run feed_sim.py` on the host, run the service
+in the container (`--add-host=host.docker.internal:host-gateway`), stop it
+with SIGTERM, and inspect `data_out/*.parquet` (e.g.
+`uv run --with pyarrow python`). No gtest here (nlib carries the container
+test suites).
 
 ## Conventions
 
 - Storage and lookup build on nlib: `nlib::hive` owns order nodes (stable
   addresses), intrusive lists order them, `nlib::map` indexes them by id.
+- Threads never share state: each stage pair communicates through exactly one
+  `nlib::single_queue` (SPSC), so no stage takes a lock. Keep it that way.
+- Parquet writing batches rows: `Reserve` a batch of builder capacity, fill it
+  with `UnsafeAppend`, write the batch as one row group.
 - New structs go to nlib's `common.h` only if they are reusable wire types;
   implementation types (intrusive nodes etc.) stay in this repo.
 - Comment style: Google C++ Style Guide, dense and short — the `cpp-comments`
