@@ -53,11 +53,13 @@ struct Metrics {
   Metric writer_books;   // book snapshot rows appended
 };
 
-// Samples `m` once a second and publishes each sample as one JSON object on
-// a PUB socket bound to `endpoint`; the socket and its context live entirely
-// on this thread. Counter deltas over the interval become *_per_s rates;
-// gauges and totals pass through. The thread never reads pipeline data, only
-// these cells. Returns once `stop` is requested.
+// Samples `m` every 100 ms and immediately publishes each sample as one raw
+// nlib::metrics record on a PUB socket bound to `endpoint`; the socket and
+// its context live entirely on this thread. The socket conflates
+// (ZMQ_CONFLATE): nothing queues beyond the newest sample, so a subscriber
+// always reads live state, never a backlog. Counters are cumulative —
+// consumers difference consecutive samples for rates. The thread never reads
+// pipeline data, only these cells. Returns once `stop` is requested.
 void RunMetrics(const Metrics& m, const std::string& endpoint, std::stop_token stop);
 
 }  // namespace nq

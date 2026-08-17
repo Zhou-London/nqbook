@@ -8,8 +8,9 @@ Guidance for Claude Code when working in this repository.
 process: a ZMQ feed thread, a book thread (one price-time order book per
 instrument, snapshots every 3 s), and an Arrow/Parquet writer thread, joined
 pairwise by lock-free `nlib::single_queue`s, plus a metrics thread that
-samples the stages' cache-line-aligned counters and publishes JSON on its own
-ZMQ PUB socket. See [README.md](README.md).
+samples the stages' cache-line-aligned counters every 100 ms and publishes
+raw `nlib::metrics` records on its own conflating ZMQ PUB socket. See
+[README.md](README.md).
 
 ## Layout
 
@@ -22,7 +23,7 @@ include/Metrics.h      single-writer metric cells + the monitor thread contract
 src/Feed.cpp           feed thread: ZMQ SUB -> FeedQueue
 src/Book.cpp           book thread: applies events, forwards them, snapshots
 src/Writer.cpp         writer thread: batched Parquet under data_out/
-src/Metrics.cpp        metrics thread: 1 Hz sampling -> JSON over its own ZMQ PUB
+src/Metrics.cpp        metrics thread: 100 ms sampling -> nlib::metrics over its own ZMQ PUB
 src/main.cpp           entry point: wiring and drain-ordered shutdown
 ```
 

@@ -23,7 +23,7 @@ The process is a persistent pipeline of three stages joined by lock-free
 | feed | receives adapted wire records over a ZMQ SUB socket, stamps `recv_ns` |
 | book | applies each event to its instrument's `nq::Orderbook`, forwards it, snapshots every book every 3 s |
 | writer | batches records into Arrow and writes one Parquet file per type under `data_out/` |
-| metrics | samples the stages' counters once a second and publishes JSON on its own ZMQ PUB socket |
+| metrics | samples the stages' counters every 100 ms and publishes each sample on its own ZMQ PUB socket |
 
 ## Shape
 
@@ -64,7 +64,7 @@ include/Metrics.h      the metric cells the hot paths write, and the monitor con
 src/Feed.cpp           feed thread: ZMQ SUB → FeedQueue
 src/Book.cpp           book thread: applies events, snapshots → RecordQueue
 src/Writer.cpp         writer thread: Arrow batches → Parquet files
-src/Metrics.cpp        metrics thread: samples the cells, publishes JSON over ZMQ
+src/Metrics.cpp        metrics thread: samples the cells, publishes nlib::metrics over ZMQ
 src/main.cpp           entry point: thread wiring and drain-ordered shutdown
 ```
 
@@ -103,12 +103,15 @@ shutdown drains the queues upstream-first, so every received record reaches
 the Parquet files, one zstd-compressed file per record type stamped with the
 start time.
 
-The metrics stream is one JSON object per second on a PUB socket — feed,
-book, and writer throughput, timed-apply latency, and book gauges
-(instruments, resting orders, memory). The hot paths only write single-writer
-cache-line-aligned counters (a relaxed load + store, ~1 ns); the metrics
-thread does all the sampling, differencing, and publishing on its own socket
-and context, and never touches pipeline data.
+The metrics stream is one raw `nlib::metrics` record (120 bytes, host
+layout) every 100 ms on a conflating PUB socket: nothing queues beyond the
+newest sample, so a subscriber always reads live state, never a backlog.
+Counters — feed messages/bytes/records, book events and timed-apply latency,
+writer rows — are cumulative; difference consecutive samples for rates. The
+book gauges (instruments, resting orders, memory) are instantaneous. The hot
+paths only write single-writer cache-line-aligned counters (a relaxed
+load + store, ~1 ns); the metrics thread does all the sampling and
+publishing on its own socket and context, and never touches pipeline data.
 
 ## Releases
 
