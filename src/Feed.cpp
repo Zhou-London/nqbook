@@ -6,6 +6,7 @@
 #include <cstring>
 #include <optional>
 #include <thread>
+#include <variant>
 
 #include <zmq.hpp>
 
@@ -36,7 +37,8 @@ std::optional<FeedEvent> Decode(const zmq::message_t& msg, std::int64_t recv_ns)
 
 }  // namespace
 
-void RunFeed(const std::string& endpoint, FeedQueue& out, std::stop_token stop) {
+void RunFeed(const std::string& endpoint, FeedQueue& out, Metrics& metrics,
+             std::stop_token stop) {
   zmq::context_t ctx;
   zmq::socket_t sub(ctx, zmq::socket_type::sub);
   sub.set(zmq::sockopt::subscribe, "");
@@ -54,12 +56,19 @@ void RunFeed(const std::string& endpoint, FeedQueue& out, std::stop_token stop) 
       throw;
     }
     if (!received) continue;  // timeout
+    metrics.feed_messages.Add();
+    metrics.feed_bytes.Add(msg.size());
     // system_clock, so the stamp shares the exchange event times' epoch.
     const std::int64_t recv_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                      std::chrono::system_clock::now().time_since_epoch())
                                      .count();
     std::optional<FeedEvent> event = Decode(msg, recv_ns);
-    if (!event) continue;
+    if (!event) {
+      metrics.feed_dropped.Add();
+      continue;
+    }
+    (std::holds_alternative<nlib::order>(*event) ? metrics.feed_orders : metrics.feed_trades)
+        .Add();
     while (!out.try_push(std::move(*event))) {  // full: wait for the book to catch up
       if (stop.stop_requested()) return;
       std::this_thread::sleep_for(std::chrono::microseconds(50));

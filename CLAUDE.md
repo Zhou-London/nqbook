@@ -5,9 +5,11 @@ Guidance for Claude Code when working in this repository.
 ## What this is
 
 `nqbook` — the limit order book service, C++23, namespace `nq`. A persistent
-process: a ZMQ feed thread, a book thread (price-time order book, snapshot
-every 3 s), and an Arrow/Parquet writer thread, joined pairwise by lock-free
-`nlib::single_queue`s. See [README.md](README.md).
+process: a ZMQ feed thread, a book thread (one price-time order book per
+instrument, snapshots every 3 s), and an Arrow/Parquet writer thread, joined
+pairwise by lock-free `nlib::single_queue`s, plus a metrics thread that
+samples the stages' cache-line-aligned counters and publishes JSON on its own
+ZMQ PUB socket. See [README.md](README.md).
 
 ## Layout
 
@@ -15,10 +17,12 @@ every 3 s), and an Arrow/Parquet writer thread, joined pairwise by lock-free
 include/nlib/          git submodule: header-only containers and wire types
 include/Orderbook.h    nq::Orderbook interface: the contract of every member
 src/Orderbook.cpp      its implementation
-include/Pipeline.h     queue types, wire framing, and the three thread contracts
+include/Pipeline.h     queue types, wire framing, and the stage thread contracts
+include/Metrics.h      single-writer metric cells + the monitor thread contract
 src/Feed.cpp           feed thread: ZMQ SUB -> FeedQueue
 src/Book.cpp           book thread: applies events, forwards them, snapshots
 src/Writer.cpp         writer thread: batched Parquet under data_out/
+src/Metrics.cpp        metrics thread: 1 Hz sampling -> JSON over its own ZMQ PUB
 src/main.cpp           entry point: wiring and drain-ordered shutdown
 ```
 
@@ -58,6 +62,10 @@ test suites).
   addresses), intrusive lists order them, `nlib::map` indexes them by id.
 - Threads never share state: each stage pair communicates through exactly one
   `nlib::single_queue` (SPSC), so no stage takes a lock. Keep it that way.
+- Monitoring never reads pipeline data. Hot paths write single-writer,
+  cache-line-aligned `Metric` cells (relaxed load + store); the metrics
+  thread only samples cells and publishes. A new metric is a new cell, not a
+  lock or a shared structure.
 - Parquet writing batches rows: `Reserve` a batch of builder capacity, fill it
   with `UnsafeAppend`, write the batch as one row group.
 - New structs go to nlib's `common.h` only if they are reusable wire types;

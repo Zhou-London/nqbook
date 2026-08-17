@@ -289,7 +289,8 @@ class BookSink {
 
 }  // namespace
 
-void RunWriter(RecordQueue& in, const std::filesystem::path& dir, std::stop_token stop) {
+void RunWriter(RecordQueue& in, const std::filesystem::path& dir, Metrics& metrics,
+               std::stop_token stop) {
   std::filesystem::create_directories(dir);
   const auto stamp = std::format(
       "{:%Y%m%dT%H%M%S}", std::chrono::floor<std::chrono::seconds>(
@@ -299,9 +300,18 @@ void RunWriter(RecordQueue& in, const std::filesystem::path& dir, std::stop_toke
   BookSink books(dir / std::format("books-{}.parquet", stamp));
 
   const auto dispatch = [&](Record&& r) {
-    std::visit(overloaded{[&](const nlib::order& o) { orders.Add(o); },
-                          [&](const nlib::trade& t) { trades.Add(t); },
-                          [&](const nlib::book& b) { books.Add(b); }},
+    std::visit(overloaded{[&](const nlib::order& o) {
+                            orders.Add(o);
+                            metrics.writer_orders.Add();
+                          },
+                          [&](const nlib::trade& t) {
+                            trades.Add(t);
+                            metrics.writer_trades.Add();
+                          },
+                          [&](const nlib::book& b) {
+                            books.Add(b);
+                            metrics.writer_books.Add();
+                          }},
                r);
   };
   while (!stop.stop_requested()) {

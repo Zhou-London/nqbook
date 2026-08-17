@@ -1,8 +1,8 @@
 #include <Pipeline.h>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <optional>
 #include <thread>
 #include <utility>
@@ -17,9 +17,6 @@ namespace {
 // Every 2^10th event is timed around its book apply; sampling keeps the
 // clock reads off the per-event path.
 constexpr std::uint64_t kSampleMask = (1 << 10) - 1;
-
-// Snapshot ticks between metrics reports.
-constexpr int kMetricsEverySnapshots = 10;
 
 // Pushes `r` into `out`, waiting while it is full; between stages a record is
 // delayed rather than dropped.
@@ -54,59 +51,40 @@ Record ToRecord(FeedEvent&& e) {
   return std::visit([](auto& rec) { return Record(rec); }, e);
 }
 
-// Event counts and sampled apply latency since the last report. Cheap on the
-// hot path: one increment per event, one steady_clock pair per sample.
-struct ApplyStats {
-  std::uint64_t events = 0;
-  std::uint64_t samples = 0;
-  std::int64_t sample_ns_total = 0;
-  std::int64_t sample_ns_max = 0;
-
-  void Note(std::int64_t ns) {
-    ++samples;
-    sample_ns_total += ns;
-    if (ns > sample_ns_max) sample_ns_max = ns;
+// Refreshes the book gauges; runs at snapshot cadence, where the books are
+// walked anyway.
+void SetGauges(const nlib::map<std::uint32_t, Orderbook>& books, Metrics& metrics) {
+  std::size_t orders = 0;
+  std::size_t bytes = 0;
+  for (const auto& [id, book] : books) {
+    orders += book.size();
+    bytes += book.MemoryBytes();
   }
-
-  // Prints one line of book totals and the window's apply latency, then
-  // starts a new window.
-  void Report(const nlib::map<std::uint32_t, Orderbook>& books) {
-    std::size_t orders = 0;
-    std::size_t bytes = 0;
-    for (const auto& [id, book] : books) {
-      orders += book.size();
-      bytes += book.MemoryBytes();
-    }
-    std::fprintf(stderr,
-                 "nqbook book: %zu instruments, %zu resting orders, %.1f MB, "
-                 "%llu events (apply avg %lld ns, max %lld ns over %llu samples)\n",
-                 books.size(), orders, static_cast<double>(bytes) / (1 << 20),
-                 static_cast<unsigned long long>(events),
-                 static_cast<long long>(samples ? sample_ns_total / static_cast<std::int64_t>(samples) : 0),
-                 static_cast<long long>(sample_ns_max),
-                 static_cast<unsigned long long>(samples));
-    *this = ApplyStats{};
-  }
-};
+  metrics.book_instruments.Set(books.size());
+  metrics.book_resting_orders.Set(orders);
+  metrics.book_memory_bytes.Set(bytes);
+}
 
 }  // namespace
 
-void RunBook(FeedQueue& in, RecordQueue& out, std::stop_token stop) {
+void RunBook(FeedQueue& in, RecordQueue& out, Metrics& metrics, std::stop_token stop) {
   nlib::map<std::uint32_t, Orderbook> books;
-  ApplyStats stats;
+  std::uint64_t events = 0;
   auto next_snapshot = std::chrono::steady_clock::now() + kSnapshotPeriod;
-  int snapshots_until_report = kMetricsEverySnapshots;
   while (!stop.stop_requested()) {
     if (std::optional<FeedEvent> e = in.try_pop()) {
-      if ((stats.events++ & kSampleMask) == 0) {
+      if ((events++ & kSampleMask) == 0) {
         const auto start = std::chrono::steady_clock::now();
         Apply(books, *e);
-        stats.Note(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       std::chrono::steady_clock::now() - start)
-                       .count());
+        metrics.book_apply_ns.Add(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start)
+                .count()));
+        metrics.book_samples.Add();
       } else {
         Apply(books, *e);
       }
+      metrics.book_events.Add();
       Forward(out, ToRecord(std::move(*e)));
     } else {
       std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -115,16 +93,14 @@ void RunBook(FeedQueue& in, RecordQueue& out, std::stop_token stop) {
     // cadence drift-free.
     if (std::chrono::steady_clock::now() >= next_snapshot) {
       for (auto& [id, book] : books) Forward(out, book.OnSnapshot());
+      SetGauges(books, metrics);
       next_snapshot += kSnapshotPeriod;
-      if (--snapshots_until_report == 0) {
-        stats.Report(books);
-        snapshots_until_report = kMetricsEverySnapshots;
-      }
     }
   }
   // The feed thread stops first, so `in` only shrinks here.
   while (std::optional<FeedEvent> e = in.try_pop()) {
     Apply(books, *e);
+    metrics.book_events.Add();
     Forward(out, ToRecord(std::move(*e)));
   }
 }

@@ -6,6 +6,7 @@
 #include <string>
 #include <variant>
 
+#include <Metrics.h>
 #include <nlib/common.h>
 #include <nlib/single_queue.h>
 
@@ -13,7 +14,8 @@ namespace nq {
 
 // The nqbook process is three stages, one thread each: feed -> book -> writer.
 // Adjacent stages share one nlib::single_queue, so every stage runs lock-free
-// with exactly one producer and one consumer per queue.
+// with exactly one producer and one consumer per queue. Each stage writes its
+// cells of a shared Metrics, which RunMetrics samples from its own thread.
 
 // One wire record in flight from the feed stage to the book stage.
 using FeedEvent = std::variant<nlib::order, nlib::trade>;
@@ -41,23 +43,25 @@ struct overloaded : Ts... {
 
 // Receives framed records on a ZMQ SUB socket connected to `endpoint`,
 // stamps each record's recv_ns with its receive time, and pushes it into
-// `out`; messages that match no framing are dropped. Waits while `out` is
-// full, so a slow book stage backpressures into ZMQ. Returns once `stop` is
-// requested.
-void RunFeed(const std::string& endpoint, FeedQueue& out, std::stop_token stop);
+// `out`; messages that match no framing are dropped and counted. Waits while
+// `out` is full, so a slow book stage backpressures into ZMQ. Returns once
+// `stop` is requested.
+void RunFeed(const std::string& endpoint, FeedQueue& out, Metrics& metrics,
+             std::stop_token stop);
 
 // Applies each event to its instrument's Orderbook (created on first sight)
 // and forwards the raw event into `out`, interleaving an OnSnapshot() record
-// per book every kSnapshotPeriod and logging book metrics — resting orders,
-// memory, sampled apply latency — every tenth snapshot. On stop it drains
-// `in` before returning, so no received event is lost.
-void RunBook(FeedQueue& in, RecordQueue& out, std::stop_token stop);
+// per book every kSnapshotPeriod. Counts events, times every 1024th apply,
+// and refreshes the book gauges at snapshot cadence. On stop it drains `in`
+// before returning, so no received event is lost.
+void RunBook(FeedQueue& in, RecordQueue& out, Metrics& metrics, std::stop_token stop);
 
 // Appends records from `in` to one Parquet file per record type under `dir`
 // (created if missing), names stamped with the writer start time. Rows are
 // written a batch at a time, one row group per batch. On stop it drains `in`,
 // flushes partial batches, and closes the files; a storage error aborts the
 // process, since running on without persistence would silently lose data.
-void RunWriter(RecordQueue& in, const std::filesystem::path& dir, std::stop_token stop);
+void RunWriter(RecordQueue& in, const std::filesystem::path& dir, Metrics& metrics,
+               std::stop_token stop);
 
 }  // namespace nq

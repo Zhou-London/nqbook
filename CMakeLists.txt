@@ -21,6 +21,7 @@ add_executable(nqbook
     src/Feed.cpp
     src/Book.cpp
     src/Writer.cpp
+    src/Metrics.cpp
     src/main.cpp
 )
 

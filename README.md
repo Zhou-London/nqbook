@@ -10,18 +10,20 @@ Project of NowQuant.
 
 `nqbook` — the limit order book service. Namespace `nq`, C++23.
 
-A price-time-priority book for one instrument, rebuilt from an order-by-order
-feed. It does not match: crossing orders rest until the feed reports their
-trades.
+Price-time-priority books, one per instrument, rebuilt from an order-by-order
+feed — `md/kraken` in [util](https://github.com/Zhou-London/nq-util) publishes
+Kraken's spot level3 feed in exactly this shape. The books do not match:
+crossing orders rest until the feed reports their trades.
 
-The process is a persistent three-thread pipeline, each pair of stages joined
-by one lock-free `nlib::single_queue`:
+The process is a persistent pipeline of three stages joined by lock-free
+`nlib::single_queue`s, plus a monitor on the side:
 
 | Thread | Does |
 |---|---|
-| feed | receives adapted wire records over a ZMQ SUB socket |
-| book | applies each event to `nq::Orderbook`, forwards it, snapshots every 3 s |
+| feed | receives adapted wire records over a ZMQ SUB socket, stamps `recv_ns` |
+| book | applies each event to its instrument's `nq::Orderbook`, forwards it, snapshots every book every 3 s |
 | writer | batches records into Arrow and writes one Parquet file per type under `data_out/` |
+| metrics | samples the stages' counters once a second and publishes JSON on its own ZMQ PUB socket |
 
 ## Shape
 
@@ -37,14 +39,19 @@ hive and chained through its own `prev` / `next` hooks, so nothing wraps it and
 resting an order costs no separate allocation; the stored copy's `qty` tracks
 the remaining quantity.
 
-`nq::Orderbook` reacts to four calls:
+`nq::Orderbook` reacts to six calls:
 
 | Handler | Meaning |
 |---|---|
 | `OnOrder()` | rests a limit-order add on its side |
 | `OnTrade()` | shrinks both resting sides by the executed quantity |
-| `OnCancel()` | shrinks an order by the cancelled quantity |
+| `OnCancel()` | removes an order from the book |
+| `OnModify()` | sets an order's remaining quantity, keeping priority while the price is unchanged |
+| `OnClear()` | drops every resting order, ahead of a feed snapshot replay |
 | `OnSnapshot()` | aggregates the top ten price levels per side into a `nlib::book` |
+
+Each book also answers `size()` and `MemoryBytes()` — the gauges behind the
+metrics stream.
 
 ## Layout
 
@@ -53,9 +60,11 @@ include/nlib/          nlib submodule: containers and wire types
 include/Orderbook.h    nq::Orderbook — the contract of every member
 src/Orderbook.cpp      its implementation
 include/Pipeline.h     the pipeline: queue types, wire framing, thread contracts
+include/Metrics.h      the metric cells the hot paths write, and the monitor contract
 src/Feed.cpp           feed thread: ZMQ SUB → FeedQueue
 src/Book.cpp           book thread: applies events, snapshots → RecordQueue
 src/Writer.cpp         writer thread: Arrow batches → Parquet files
+src/Metrics.cpp        metrics thread: samples the cells, publishes JSON over ZMQ
 src/main.cpp           entry point: thread wiring and drain-ordered shutdown
 ```
 
@@ -86,11 +95,20 @@ docker run --rm --add-host=host.docker.internal:host-gateway \
     -v "$PWD":/work -w /work dev:latest ./build/nqbook
 ```
 
-`nqbook [feed_endpoint] [out_dir]` defaults to
-`tcp://host.docker.internal:5555` (overridable via `NQBOOK_FEED_ENDPOINT`)
-and `data_out`. SIGINT or SIGTERM stops it; shutdown drains the queues
-upstream-first, so every received record reaches the Parquet files, one
-zstd-compressed file per record type stamped with the start time.
+`nqbook [feed_endpoint] [out_dir] [metrics_endpoint]` defaults to
+`tcp://host.docker.internal:5555` (overridable via `NQBOOK_FEED_ENDPOINT`),
+`data_out`, and `tcp://0.0.0.0:5556` (`NQBOOK_METRICS_ENDPOINT`; add
+`-p 5556:5556` to reach it from the host). SIGINT or SIGTERM stops it;
+shutdown drains the queues upstream-first, so every received record reaches
+the Parquet files, one zstd-compressed file per record type stamped with the
+start time.
+
+The metrics stream is one JSON object per second on a PUB socket — feed,
+book, and writer throughput, timed-apply latency, and book gauges
+(instruments, resting orders, memory). The hot paths only write single-writer
+cache-line-aligned counters (a relaxed load + store, ~1 ns); the metrics
+thread does all the sampling, differencing, and publishing on its own socket
+and context, and never touches pipeline data.
 
 ## Releases
 
