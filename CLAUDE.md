@@ -25,6 +25,7 @@ src/Book.cpp           book thread: applies events, forwards them, snapshots
 src/Writer.cpp         writer thread: batched Parquet under data_out/
 src/Metrics.cpp        metrics thread: 100 ms sampling -> nlib::metrics over its own ZMQ PUB
 src/main.cpp           entry point: wiring and drain-ordered shutdown
+ui/                    Next.js dashboard over the metrics stream; npm on the host, not the container
 ```
 
 Contracts live at the declarations in the headers; the `.cpp` files comment

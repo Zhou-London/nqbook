@@ -66,6 +66,7 @@ src/Book.cpp           book thread: applies events, snapshots → RecordQueue
 src/Writer.cpp         writer thread: Arrow batches → Parquet files
 src/Metrics.cpp        metrics thread: samples the cells, publishes nlib::metrics over ZMQ
 src/main.cpp           entry point: thread wiring and drain-ordered shutdown
+ui/                    Next.js dashboard over the metrics stream (runs on the host)
 ```
 
 Every contract is documented at its declaration in the headers; the `.cpp`
@@ -112,6 +113,13 @@ book gauges (instruments, resting orders, memory) are instantaneous. The hot
 paths only write single-writer cache-line-aligned counters (a relaxed
 load + store, ~1 ns); the metrics thread does all the sampling and
 publishing on its own socket and context, and never touches pipeline data.
+
+[`ui/`](ui/README.md) renders that stream live in the browser — a Next.js
+app that bridges ZMQ to Server-Sent Events and charts the rolling minute:
+
+```bash
+cd ui && npm install && npm run dev   # http://localhost:3000
+```
 
 ## Releases
 
