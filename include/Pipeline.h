@@ -39,15 +39,18 @@ struct overloaded : Ts... {
   using Ts::operator()...;
 };
 
-// Receives framed records on a ZMQ SUB socket connected to `endpoint` and
-// pushes them into `out`; messages that match no framing are dropped. Waits
-// while `out` is full, so a slow book stage backpressures into ZMQ. Returns
-// once `stop` is requested.
+// Receives framed records on a ZMQ SUB socket connected to `endpoint`,
+// stamps each record's recv_ns with its receive time, and pushes it into
+// `out`; messages that match no framing are dropped. Waits while `out` is
+// full, so a slow book stage backpressures into ZMQ. Returns once `stop` is
+// requested.
 void RunFeed(const std::string& endpoint, FeedQueue& out, std::stop_token stop);
 
-// Applies each event from `in` to an Orderbook and forwards the raw event
-// into `out`, interleaving an OnSnapshot() record every kSnapshotPeriod. On
-// stop it drains `in` before returning, so no received event is lost.
+// Applies each event to its instrument's Orderbook (created on first sight)
+// and forwards the raw event into `out`, interleaving an OnSnapshot() record
+// per book every kSnapshotPeriod and logging book metrics — resting orders,
+// memory, sampled apply latency — every tenth snapshot. On stop it drains
+// `in` before returning, so no received event is lost.
 void RunBook(FeedQueue& in, RecordQueue& out, std::stop_token stop);
 
 // Appends records from `in` to one Parquet file per record type under `dir`

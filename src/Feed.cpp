@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <optional>
 #include <thread>
@@ -11,20 +12,23 @@
 namespace nq {
 namespace {
 
-// Copies a framed wire record out of `msg`; returns std::nullopt when neither
-// tag-plus-size matches. The order's list hooks are book-owned state, so the
-// wire bytes under them are discarded.
-std::optional<FeedEvent> Decode(const zmq::message_t& msg) {
+// Copies a framed wire record out of `msg` and stamps its recv_ns with
+// `recv_ns`; returns std::nullopt when neither tag-plus-size matches. The
+// order's list hooks are book-owned state, so the wire bytes under them are
+// discarded.
+std::optional<FeedEvent> Decode(const zmq::message_t& msg, std::int64_t recv_ns) {
   const auto* bytes = static_cast<const unsigned char*>(msg.data());
   if (msg.size() == 1 + sizeof(nlib::order) && bytes[0] == kOrderTag) {
     nlib::order o;
     std::memcpy(&o, bytes + 1, sizeof o);
     o.prev = o.next = nullptr;
+    o.recv_ns = recv_ns;
     return o;
   }
   if (msg.size() == 1 + sizeof(nlib::trade) && bytes[0] == kTradeTag) {
     nlib::trade t;
     std::memcpy(&t, bytes + 1, sizeof t);
+    t.recv_ns = recv_ns;
     return t;
   }
   return std::nullopt;
@@ -50,7 +54,11 @@ void RunFeed(const std::string& endpoint, FeedQueue& out, std::stop_token stop) 
       throw;
     }
     if (!received) continue;  // timeout
-    std::optional<FeedEvent> event = Decode(msg);
+    // system_clock, so the stamp shares the exchange event times' epoch.
+    const std::int64_t recv_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::system_clock::now().time_since_epoch())
+                                     .count();
+    std::optional<FeedEvent> event = Decode(msg, recv_ns);
     if (!event) continue;
     while (!out.try_push(std::move(*event))) {  // full: wait for the book to catch up
       if (stop.stop_requested()) return;

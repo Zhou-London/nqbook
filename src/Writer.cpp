@@ -68,7 +68,8 @@ class OrderSink {
                                arrow::field("order_id", arrow::int64()),
                                arrow::field("price", arrow::int64()),
                                arrow::field("qty", arrow::int64()),
-                               arrow::field("time_ns", arrow::int64()),
+                               arrow::field("event_ns", arrow::int64()),
+                               arrow::field("recv_ns", arrow::int64()),
                                arrow::field("instrument_id", arrow::uint32()),
                                arrow::field("side", arrow::uint8()),
                                arrow::field("type", arrow::uint8()),
@@ -82,7 +83,8 @@ class OrderSink {
     order_id_.UnsafeAppend(o.order_id);
     price_.UnsafeAppend(o.price);
     qty_.UnsafeAppend(o.qty);
-    time_ns_.UnsafeAppend(o.time_ns);
+    event_ns_.UnsafeAppend(o.event_ns);
+    recv_ns_.UnsafeAppend(o.recv_ns);
     instrument_id_.UnsafeAppend(o.instrument_id);
     side_.UnsafeAppend(std::to_underlying(o.side));
     type_.UnsafeAppend(std::to_underlying(o.type));
@@ -92,16 +94,17 @@ class OrderSink {
 
   void Flush() {
     if (rows_ == 0) return;
-    std::vector<std::shared_ptr<arrow::Array>> columns(9);
+    std::vector<std::shared_ptr<arrow::Array>> columns(10);
     Check(seq_.Finish(&columns[0]));
     Check(order_id_.Finish(&columns[1]));
     Check(price_.Finish(&columns[2]));
     Check(qty_.Finish(&columns[3]));
-    Check(time_ns_.Finish(&columns[4]));
-    Check(instrument_id_.Finish(&columns[5]));
-    Check(side_.Finish(&columns[6]));
-    Check(type_.Finish(&columns[7]));
-    Check(action_.Finish(&columns[8]));
+    Check(event_ns_.Finish(&columns[4]));
+    Check(recv_ns_.Finish(&columns[5]));
+    Check(instrument_id_.Finish(&columns[6]));
+    Check(side_.Finish(&columns[7]));
+    Check(type_.Finish(&columns[8]));
+    Check(action_.Finish(&columns[9]));
     Check(writer_->WriteRecordBatch(
         *arrow::RecordBatch::Make(schema_, std::exchange(rows_, 0), std::move(columns))));
     Reserve();
@@ -116,14 +119,14 @@ class OrderSink {
   void Reserve() {
     for (arrow::ArrayBuilder* b :
          std::initializer_list<arrow::ArrayBuilder*>{&seq_, &order_id_, &price_, &qty_,
-                                                     &time_ns_, &instrument_id_, &side_, &type_,
-                                                     &action_})
+                                                     &event_ns_, &recv_ns_, &instrument_id_,
+                                                     &side_, &type_, &action_})
       Check(b->Reserve(kBatchRows));
   }
 
   std::shared_ptr<arrow::Schema> schema_;
   std::unique_ptr<parquet::arrow::FileWriter> writer_;
-  arrow::Int64Builder seq_, order_id_, price_, qty_, time_ns_;
+  arrow::Int64Builder seq_, order_id_, price_, qty_, event_ns_, recv_ns_;
   arrow::UInt32Builder instrument_id_;
   arrow::UInt8Builder side_, type_, action_;
   std::int64_t rows_ = 0;  // rows in the open batch
@@ -138,7 +141,8 @@ class TradeSink {
                                arrow::field("sell_order_id", arrow::int64()),
                                arrow::field("price", arrow::int64()),
                                arrow::field("qty", arrow::int64()),
-                               arrow::field("time_ns", arrow::int64()),
+                               arrow::field("event_ns", arrow::int64()),
+                               arrow::field("recv_ns", arrow::int64()),
                                arrow::field("instrument_id", arrow::uint32()),
                                arrow::field("side", arrow::uint8())})),
         writer_(MakeWriter(path, *schema_)) {
@@ -151,7 +155,8 @@ class TradeSink {
     sell_order_id_.UnsafeAppend(t.sell_order_id);
     price_.UnsafeAppend(t.price);
     qty_.UnsafeAppend(t.qty);
-    time_ns_.UnsafeAppend(t.time_ns);
+    event_ns_.UnsafeAppend(t.event_ns);
+    recv_ns_.UnsafeAppend(t.recv_ns);
     instrument_id_.UnsafeAppend(t.instrument_id);
     side_.UnsafeAppend(std::to_underlying(t.side));
     if (++rows_ == kBatchRows) Flush();
@@ -159,15 +164,16 @@ class TradeSink {
 
   void Flush() {
     if (rows_ == 0) return;
-    std::vector<std::shared_ptr<arrow::Array>> columns(8);
+    std::vector<std::shared_ptr<arrow::Array>> columns(9);
     Check(seq_.Finish(&columns[0]));
     Check(buy_order_id_.Finish(&columns[1]));
     Check(sell_order_id_.Finish(&columns[2]));
     Check(price_.Finish(&columns[3]));
     Check(qty_.Finish(&columns[4]));
-    Check(time_ns_.Finish(&columns[5]));
-    Check(instrument_id_.Finish(&columns[6]));
-    Check(side_.Finish(&columns[7]));
+    Check(event_ns_.Finish(&columns[5]));
+    Check(recv_ns_.Finish(&columns[6]));
+    Check(instrument_id_.Finish(&columns[7]));
+    Check(side_.Finish(&columns[8]));
     Check(writer_->WriteRecordBatch(
         *arrow::RecordBatch::Make(schema_, std::exchange(rows_, 0), std::move(columns))));
     Reserve();
@@ -182,14 +188,14 @@ class TradeSink {
   void Reserve() {
     for (arrow::ArrayBuilder* b :
          std::initializer_list<arrow::ArrayBuilder*>{&seq_, &buy_order_id_, &sell_order_id_,
-                                                     &price_, &qty_, &time_ns_, &instrument_id_,
-                                                     &side_})
+                                                     &price_, &qty_, &event_ns_, &recv_ns_,
+                                                     &instrument_id_, &side_})
       Check(b->Reserve(kBatchRows));
   }
 
   std::shared_ptr<arrow::Schema> schema_;
   std::unique_ptr<parquet::arrow::FileWriter> writer_;
-  arrow::Int64Builder seq_, buy_order_id_, sell_order_id_, price_, qty_, time_ns_;
+  arrow::Int64Builder seq_, buy_order_id_, sell_order_id_, price_, qty_, event_ns_, recv_ns_;
   arrow::UInt32Builder instrument_id_;
   arrow::UInt8Builder side_;
   std::int64_t rows_ = 0;  // rows in the open batch
@@ -202,7 +208,8 @@ class TradeSink {
 class BookSink {
  public:
   explicit BookSink(const std::filesystem::path& path)
-      : schema_(arrow::schema({arrow::field("time_ns", arrow::int64()),
+      : schema_(arrow::schema({arrow::field("event_ns", arrow::int64()),
+                               arrow::field("recv_ns", arrow::int64()),
                                arrow::field("instrument_id", arrow::uint32()),
                                arrow::field("bid_price", arrow::fixed_size_list(arrow::int64(), kDepth)),
                                arrow::field("bid_qty", arrow::fixed_size_list(arrow::int64(), kDepth)),
@@ -213,7 +220,8 @@ class BookSink {
   }
 
   void Add(const nlib::book& b) {
-    time_ns_.UnsafeAppend(b.time_ns);
+    event_ns_.UnsafeAppend(b.event_ns);
+    recv_ns_.UnsafeAppend(b.recv_ns);
     instrument_id_.UnsafeAppend(b.instrument_id);
     for (std::int32_t i = 0; i < kDepth; ++i) {
       bid_price_->UnsafeAppend(b.bid_price[i]);
@@ -229,13 +237,14 @@ class BookSink {
     for (arrow::FixedSizeListBuilder* lists :
          {&bid_price_lists_, &bid_qty_lists_, &ask_price_lists_, &ask_qty_lists_})
       Check(lists->AppendValues(rows_));  // marks the batch's lists valid in one call
-    std::vector<std::shared_ptr<arrow::Array>> columns(6);
-    Check(time_ns_.Finish(&columns[0]));
-    Check(instrument_id_.Finish(&columns[1]));
-    Check(bid_price_lists_.Finish(&columns[2]));
-    Check(bid_qty_lists_.Finish(&columns[3]));
-    Check(ask_price_lists_.Finish(&columns[4]));
-    Check(ask_qty_lists_.Finish(&columns[5]));
+    std::vector<std::shared_ptr<arrow::Array>> columns(7);
+    Check(event_ns_.Finish(&columns[0]));
+    Check(recv_ns_.Finish(&columns[1]));
+    Check(instrument_id_.Finish(&columns[2]));
+    Check(bid_price_lists_.Finish(&columns[3]));
+    Check(bid_qty_lists_.Finish(&columns[4]));
+    Check(ask_price_lists_.Finish(&columns[5]));
+    Check(ask_qty_lists_.Finish(&columns[6]));
     Check(writer_->WriteRecordBatch(
         *arrow::RecordBatch::Make(schema_, std::exchange(rows_, 0), std::move(columns))));
     Reserve();
@@ -248,7 +257,8 @@ class BookSink {
 
  private:
   void Reserve() {
-    Check(time_ns_.Reserve(kBatchRows));
+    Check(event_ns_.Reserve(kBatchRows));
+    Check(recv_ns_.Reserve(kBatchRows));
     Check(instrument_id_.Reserve(kBatchRows));
     for (arrow::FixedSizeListBuilder* lists :
          {&bid_price_lists_, &bid_qty_lists_, &ask_price_lists_, &ask_qty_lists_})
@@ -260,7 +270,7 @@ class BookSink {
 
   std::shared_ptr<arrow::Schema> schema_;
   std::unique_ptr<parquet::arrow::FileWriter> writer_;
-  arrow::Int64Builder time_ns_;
+  arrow::Int64Builder event_ns_, recv_ns_;
   arrow::UInt32Builder instrument_id_;
   std::shared_ptr<arrow::Int64Builder> bid_price_ = std::make_shared<arrow::Int64Builder>();
   std::shared_ptr<arrow::Int64Builder> bid_qty_ = std::make_shared<arrow::Int64Builder>();
