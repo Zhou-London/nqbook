@@ -12,12 +12,24 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_subdirectory(include/nlib)
 
+find_package(Arrow REQUIRED)
+find_package(Parquet REQUIRED)
+find_package(cppzmq REQUIRED)
+
 add_executable(nqbook
     src/Orderbook.cpp
+    src/Feed.cpp
+    src/Book.cpp
+    src/Writer.cpp
     src/main.cpp
 )
 
 target_include_directories(nqbook PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(nqbook PRIVATE nlib::nlib)
+target_link_libraries(nqbook PRIVATE
+    nlib::nlib
+    Arrow::arrow_shared
+    Parquet::parquet_shared
+    cppzmq
+)

@@ -1,5 +1,6 @@
 build/
 compile_commands.json
+data_out/
 .cache/
 
 .DS_Store
