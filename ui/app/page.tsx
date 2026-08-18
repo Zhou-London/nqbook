@@ -1,45 +1,89 @@
 "use client";
 
 // The dashboard: subscribes to /api/metrics (SSE), keeps a rolling 60 s of
-// samples, and differences consecutive cumulative counters into rates on the
-// client. All series wear the one accent hue; status colors mark only the
-// connection state and the dropped counter.
+// samples, and plots cumulative counters as per-second rates. Each sample is
+// stamped with Date.now() on arrival; its counter increments enter a sliding
+// 1 s wall-clock window (lib/rate.ts), whose sum is the rate drawn. Gauges
+// (instruments, resting orders, memory) are drawn as received. All series
+// wear the one accent hue; status colors mark only the connection state and
+// the dropped counter.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { MetricsSample } from "@/lib/metrics";
+import { RATE_WINDOW_MS, SlidingRate } from "@/lib/rate";
 
 /** Samples kept: 60 s at the publisher's 10 Hz. */
 const WINDOW = 600;
 
-/** Trailing samples for the apply-latency estimate; applies are timed 1 in
- * 1024, so a single 100 ms window usually holds no timed apply. */
-const LATENCY_LOOKBACK = 50;
+/** The cumulative counters in a sample; everything else is a gauge. */
+const COUNTER_KEYS = [
+  "feedMessages",
+  "feedBytes",
+  "feedOrders",
+  "feedTrades",
+  "feedDropped",
+  "bookEvents",
+  "bookApplyNs",
+  "bookSamples",
+  "writerOrders",
+  "writerTrades",
+  "writerBooks",
+] as const;
+
+type CounterKey = (typeof COUNTER_KEYS)[number];
+
+/** Windowed per-second rates derived from one sample's arrival, plus the
+ * mean apply time (windowed ns per windowed timed apply). */
+type RatePoint = Record<CounterKey, number> & { bookApplyMeanNs: number };
 
 type Status = "connecting" | "live" | "stalled" | "offline";
 
 function useMetricsStream() {
   const [samples, setSamples] = useState<MetricsSample[]>([]);
+  const [rates, setRates] = useState<RatePoint[]>([]);
   const [status, setStatus] = useState<Status>("connecting");
   const [endpoint, setEndpoint] = useState("");
   const lastArrival = useRef(0);
 
   useEffect(() => {
+    const windows = Object.fromEntries(
+      COUNTER_KEYS.map((key) => [key, new SlidingRate()]),
+    ) as Record<CounterKey, SlidingRate>;
+    let prev: MetricsSample | null = null;
+    let streamStart = 0;
+
     const source = new EventSource("/api/metrics");
     source.addEventListener("hello", (event) => {
       setEndpoint(JSON.parse((event as MessageEvent).data).endpoint);
     });
     source.onmessage = (event) => {
       const sample: MetricsSample = JSON.parse(event.data);
-      lastArrival.current = Date.now();
+      const now = Date.now();
+      lastArrival.current = now;
       setStatus("live");
-      setSamples((prev) => {
-        // A counter running backwards means nqbook restarted; the old
-        // window would difference into nonsense, so start over.
-        const last = prev[prev.length - 1];
-        if (last && sample.feedMessages < last.feedMessages) return [sample];
-        return [...prev.slice(-(WINDOW - 1)), sample];
-      });
+      setSamples((old) => [...old.slice(-(WINDOW - 1)), sample]);
+
+      if (prev !== null) {
+        // A counter below its previous value means nqbook restarted; the
+        // post-restart count is the increment.
+        for (const key of COUNTER_KEYS) {
+          windows[key].push(now, sample[key] >= prev[key] ? sample[key] - prev[key] : sample[key]);
+        }
+        // Until the stream is a full window old, scale the partial window up
+        // to a second so rates don't ramp in from zero.
+        const span = Math.min(RATE_WINDOW_MS, Math.max(1, now - streamStart));
+        const scale = 1000 / span;
+        const point = Object.fromEntries(
+          COUNTER_KEYS.map((key) => [key, windows[key].total(now) * scale]),
+        ) as RatePoint;
+        const applies = windows.bookSamples.total(now);
+        point.bookApplyMeanNs = applies > 0 ? windows.bookApplyNs.total(now) / applies : 0;
+        setRates((old) => [...old.slice(-(WINDOW - 1)), point]);
+      } else {
+        streamStart = now;
+      }
+      prev = sample;
     };
     source.onerror = () => setStatus("offline");
 
@@ -56,38 +100,12 @@ function useMetricsStream() {
     };
   }, []);
 
-  return { samples, status, endpoint };
+  return { samples, rates, status, endpoint };
 }
 
-/** Per-second rate of a cumulative counter, one point per adjacent pair. */
-function rateSeries(samples: MetricsSample[], value: (s: MetricsSample) => number): number[] {
-  const out: number[] = [];
-  for (let i = 1; i < samples.length; i++) {
-    const dt = (samples[i].tsNs - samples[i - 1].tsNs) / 1e9;
-    out.push(dt > 0 ? (value(samples[i]) - value(samples[i - 1])) / dt : 0);
-  }
-  return out;
-}
-
-/** Average timed-apply latency over a trailing window, per sample. */
-function latencySeries(samples: MetricsSample[]): number[] {
-  const out: number[] = [];
-  for (let i = 1; i < samples.length; i++) {
-    const j = Math.max(0, i - LATENCY_LOOKBACK);
-    const timed = samples[i].bookSamples - samples[j].bookSamples;
-    out.push(
-      timed > 0
-        ? (samples[i].bookApplyNs - samples[j].bookApplyNs) / timed
-        : samples[i].bookSamples > 0
-          ? samples[i].bookApplyNs / samples[i].bookSamples
-          : 0,
-    );
-  }
-  return out;
-}
-
-function gaugeSeries(samples: MetricsSample[], key: keyof MetricsSample): number[] {
-  return samples.slice(1).map((sample) => sample[key]);
+/** One field of every point, in arrival order. */
+function series<T extends Record<keyof T, number>>(points: T[], key: keyof T): number[] {
+  return points.map((point) => point[key]);
 }
 
 const fmtCount = (n: number): string => {
@@ -207,7 +225,6 @@ function Tile({
   unit,
   wide = false,
   height,
-  smooth = false,
 }: {
   label: string;
   points: number[];
@@ -215,15 +232,8 @@ function Tile({
   unit?: string;
   wide?: boolean;
   height?: number;
-  /** Headline as the mean of the last second; rates at 100 ms granularity
-   * flicker through zero, and the sparkline already shows the raw shape. */
-  smooth?: boolean;
 }) {
-  let latest: number | null = points.length ? points[points.length - 1] : null;
-  if (smooth && points.length) {
-    const tail = points.slice(-10);
-    latest = tail.reduce((a, b) => a + b, 0) / tail.length;
-  }
+  const latest: number | null = points.length ? points[points.length - 1] : null;
   return (
     <div className={wide ? "tile wide" : "tile"}>
       <div className="label">{label}</div>
@@ -244,18 +254,29 @@ const STATUS_TEXT: Record<Status, string> = {
 };
 
 export default function Page() {
-  const { samples, status, endpoint } = useMetricsStream();
+  const { samples, rates, status, endpoint } = useMetricsStream();
 
-  const series = useMemo(
+  const r = useMemo(
     () => ({
-      feedMsg: rateSeries(samples, (s) => s.feedMessages),
-      feedBytes: rateSeries(samples, (s) => s.feedBytes),
-      bookEvents: rateSeries(samples, (s) => s.bookEvents),
-      writerRows: rateSeries(samples, (s) => s.writerOrders + s.writerTrades + s.writerBooks),
-      latency: latencySeries(samples),
-      resting: gaugeSeries(samples, "bookRestingOrders"),
-      instruments: gaugeSeries(samples, "bookInstruments"),
-      memory: gaugeSeries(samples, "bookMemoryBytes"),
+      feedMessages: series(rates, "feedMessages"),
+      feedBytes: series(rates, "feedBytes"),
+      feedOrders: series(rates, "feedOrders"),
+      feedTrades: series(rates, "feedTrades"),
+      feedDropped: series(rates, "feedDropped"),
+      bookEvents: series(rates, "bookEvents"),
+      bookApplyMeanNs: series(rates, "bookApplyMeanNs"),
+      bookSamples: series(rates, "bookSamples"),
+      writerOrders: series(rates, "writerOrders"),
+      writerTrades: series(rates, "writerTrades"),
+      writerBooks: series(rates, "writerBooks"),
+    }),
+    [rates],
+  );
+  const g = useMemo(
+    () => ({
+      bookInstruments: series(samples, "bookInstruments"),
+      bookRestingOrders: series(samples, "bookRestingOrders"),
+      bookMemoryBytes: series(samples, "bookMemoryBytes"),
     }),
     [samples],
   );
@@ -274,60 +295,37 @@ export default function Page() {
         {endpoint && <span className="endpoint">{endpoint}</span>}
       </header>
 
-      {samples.length < 2 ? (
+      {rates.length < 2 ? (
         <div className="waiting">
           waiting for samples from the metrics stream
           {status === "offline" && " — is the dev server's ZMQ bridge running?"}
         </div>
       ) : (
         <>
-          <h2 className="section">Throughput</h2>
+          <h2 className="section">Feed</h2>
           <div className="grid">
-            <Tile label="Book events" points={series.bookEvents} format={fmtCount} unit="/s" wide smooth />
-            <Tile label="Feed messages" points={series.feedMsg} format={fmtCount} unit="/s" smooth />
-            <Tile label="Feed volume" points={series.feedBytes} format={fmtBytes} unit="/s" smooth />
-            <Tile label="Writer rows" points={series.writerRows} format={fmtCount} unit="/s" smooth />
+            <Tile label="Feed messages" points={r.feedMessages} format={fmtCount} unit="/s" wide />
+            <Tile label="Feed bytes" points={r.feedBytes} format={fmtBytes} unit="/s" />
+            <Tile label="Feed orders" points={r.feedOrders} format={fmtCount} unit="/s" />
+            <Tile label="Feed trades" points={r.feedTrades} format={fmtCount} unit="/s" />
+            <Tile label="Dropped frames" points={r.feedDropped} format={fmtCount} unit="/s" />
           </div>
 
           <h2 className="section">Book</h2>
           <div className="grid">
-            <Tile label="Apply latency (sampled avg)" points={series.latency} format={fmtNs} wide height={90} />
-            <Tile label="Resting orders" points={series.resting} format={fmtCount} />
-            <Tile label="Instruments" points={series.instruments} format={fmtCount} />
-            <Tile label="Book memory" points={series.memory} format={fmtBytes} />
+            <Tile label="Book events" points={r.bookEvents} format={fmtCount} unit="/s" wide />
+            <Tile label="Apply time (mean)" points={r.bookApplyMeanNs} format={fmtNs} />
+            <Tile label="Timed applies" points={r.bookSamples} format={fmtCount} unit="/s" />
+            <Tile label="Instruments" points={g.bookInstruments} format={fmtCount} />
+            <Tile label="Resting orders" points={g.bookRestingOrders} format={fmtCount} />
+            <Tile label="Book memory" points={g.bookMemoryBytes} format={fmtBytes} />
           </div>
 
-          <h2 className="section">Totals since start</h2>
-          <div className="totals">
-            <span className="item">
-              <span className="k">feed messages</span>
-              <span className="v">{last.feedMessages.toLocaleString()}</span>
-            </span>
-            <span className="item">
-              <span className="k">orders</span>
-              <span className="v">{last.feedOrders.toLocaleString()}</span>
-            </span>
-            <span className="item">
-              <span className="k">trades</span>
-              <span className="v">{last.feedTrades.toLocaleString()}</span>
-            </span>
-            <span className="item">
-              <span className="k">book events</span>
-              <span className="v">{last.bookEvents.toLocaleString()}</span>
-            </span>
-            <span className="item">
-              <span className="k">writer rows</span>
-              <span className="v">
-                {(last.writerOrders + last.writerTrades + last.writerBooks).toLocaleString()}
-              </span>
-            </span>
-            <span className="item">
-              <span className="k">dropped frames</span>
-              <span className={last.feedDropped > 0 ? "v bad" : "v"}>
-                {last.feedDropped > 0 ? "⚠ " : ""}
-                {last.feedDropped.toLocaleString()}
-              </span>
-            </span>
+          <h2 className="section">Writer</h2>
+          <div className="grid">
+            <Tile label="Writer orders" points={r.writerOrders} format={fmtCount} unit="/s" />
+            <Tile label="Writer trades" points={r.writerTrades} format={fmtCount} unit="/s" />
+            <Tile label="Writer books" points={r.writerBooks} format={fmtCount} unit="/s" />
           </div>
 
           <details className="raw">
