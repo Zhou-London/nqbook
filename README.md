@@ -66,6 +66,7 @@ src/Book.cpp           book thread: applies events, snapshots → RecordQueue
 src/Writer.cpp         writer thread: Arrow batches → Parquet files
 src/Metrics.cpp        metrics thread: samples the cells, publishes nlib::metrics over ZMQ
 src/main.cpp           entry point: thread wiring and drain-ordered shutdown
+compose.yml            the service in the dev container, metrics port published
 ui/                    Next.js dashboard over the metrics stream (runs on the host)
 ```
 
@@ -96,6 +97,14 @@ docker run --rm --add-host=host.docker.internal:host-gateway \
     -v "$PWD":/work -w /work dev:latest ./build/nqbook
 ```
 
+[`compose.yml`](compose.yml) is the same run, spelled once: the `dev` image
+over the working tree with `5556:5556` published, so the dashboard on the host
+reaches the metrics socket without repeating the flags.
+
+```bash
+docker compose up          # equivalently, and Ctrl-C to drain and stop
+```
+
 `nqbook [feed_endpoint] [out_dir] [metrics_endpoint]` defaults to
 `tcp://host.docker.internal:5555` (overridable via `NQBOOK_FEED_ENDPOINT`),
 `data_out`, and `tcp://0.0.0.0:5556` (`NQBOOK_METRICS_ENDPOINT`; add
@@ -115,13 +124,48 @@ load + store, ~1 ns); the metrics thread does all the sampling and
 publishing on its own socket and context, and never touches pipeline data.
 
 [`ui/`](ui/README.md) renders that stream live in the browser — a Next.js
-app that bridges ZMQ to Server-Sent Events and charts the rolling minute:
+app that bridges ZMQ to Server-Sent Events and charts the rolling minute,
+turning each counter into a per-second rate over a sliding 1 s window of
+arrival times:
 
 ```bash
 cd ui && npm install && npm run dev   # http://localhost:3000
 ```
 
 ## Releases
+
+### v0.3.0 — 2026-08-18
+
+`nqbook` took a real exchange feed and grew an instrument panel: a monitoring
+thread, a metrics socket, and a dashboard reading it live.
+
+- **The feed is Kraken's spot level3**, normalized by `md/kraken` in
+  [util](https://github.com/Zhou-London/nq-util). The book handles the full
+  action set the feed uses — `modify` keeps queue priority while the price is
+  unchanged, `clear` drops an instrument's resting orders ahead of a snapshot
+  replay — and prices and quantities are fixed point at nlib's scales.
+- **A metrics thread**, off the hot path. The stages write single-writer,
+  cache-line-aligned counters (a relaxed load plus store, ~1 ns); the monitor
+  samples them every 100 ms and publishes each sample as a raw 120-byte
+  `nlib::metrics` record on its own ZMQ PUB socket, `conflate` set, so a
+  subscriber always reads live state rather than a backlog. Monitoring never
+  reads pipeline data and never takes a lock.
+- **Apply latency is sampled**, 1 in 1024 applies, as cumulative nanoseconds
+  plus a count — the ratio is the mean per timed apply, at no cost to the
+  untimed ones.
+- **[`ui/`](ui/README.md), the dashboard**, moved here from `util` so the
+  service and its instrument panel version together. A Next.js route holds one
+  conflated ZMQ SUB per browser client and relays samples over Server-Sent
+  Events; the page keeps a rolling minute and turns counters into per-second
+  rates over a sliding 1 s window of arrival times, tiled by stage. Runs on
+  the host with Node, on port 3000.
+- **[`compose.yml`](compose.yml)** runs the service in the `dev` container
+  with the metrics port published, replacing the flag-by-flag `docker run`.
+- **`NQBOOK_METRICS_ENDPOINT`** and a third positional argument configure the
+  metrics socket; it defaults to `tcp://0.0.0.0:5556`.
+- **nlib bumped** to `d248297`: the split `event_ns` / `recv_ns` times, the
+  fixed-point `qty_scale`, the `modify` and `clear` actions, `nlib::metrics`,
+  and `map::capacity()` for the memory gauge.
 
 ### v0.2.0 — 2026-08-17
 

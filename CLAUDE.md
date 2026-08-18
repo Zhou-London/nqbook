@@ -25,6 +25,7 @@ src/Book.cpp           book thread: applies events, forwards them, snapshots
 src/Writer.cpp         writer thread: batched Parquet under data_out/
 src/Metrics.cpp        metrics thread: 100 ms sampling -> nlib::metrics over its own ZMQ PUB
 src/main.cpp           entry point: wiring and drain-ordered shutdown
+compose.yml            the service in the dev container, 5556 published
 ui/                    Next.js dashboard over the metrics stream; npm on the host, not the container
 ```
 
@@ -48,14 +49,20 @@ docker run --rm -v "$PWD":/work -w /work dev:latest bash -c \
     'cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -G Ninja && cmake --build build -j'
 ```
 
+`compose.yml` runs the built binary in that image with `5556:5556`
+published (`docker compose up`); it does not build. The dashboard is host-side
+npm: `cd ui && npm run dev`, port 3000 either way.
+
 A clone made before the submodule moved to `include/nlib` needs
 `git submodule sync` first; without it the old path stays checked out and the
 `add_subdirectory(include/nlib)` line fails to configure.
 
-Testing is end to end: run `uv run feed_sim.py` on the host, run the service
-in the container (`--add-host=host.docker.internal:host-gateway`), stop it
-with SIGTERM, and inspect `data_out/*.parquet` (e.g.
-`uv run --with pyarrow python`). No gtest here (nlib carries the container
+Testing is end to end: publish a feed on the host — `uv run feed_sim.py` for a
+synthetic one, `md/kraken` for live Kraken level3 — run the service in the
+container (`--add-host=host.docker.internal:host-gateway`, or
+`docker compose up`), stop it with SIGTERM, and inspect `data_out/*.parquet`
+(e.g. `uv run --with pyarrow python`). The dashboard is the live check on the
+pipeline while it runs. No gtest here (nlib carries the container
 test suites).
 
 ## Conventions

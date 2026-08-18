@@ -1,0 +1,10 @@
+services:
+  app:
+    image: dev:latest
+    container_name: nqbook
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "5556:5556"
+    command: "./build/nqbook"
