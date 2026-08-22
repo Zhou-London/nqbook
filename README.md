@@ -45,8 +45,8 @@ the remaining quantity.
 |---|---|
 | `OnOrder()` | rests a limit-order add on its side |
 | `OnTrade()` | shrinks both resting sides by the executed quantity |
-| `OnCancel()` | removes an order from the book |
-| `OnModify()` | sets an order's remaining quantity, keeping priority while the price is unchanged |
+| `OnCancel()` | takes `cancel_qty` out of an order; it leaves once nothing remains |
+| `OnModify()` | sets an order's remaining quantity to `new_qty`, keeping priority while the price is unchanged |
 | `OnClear()` | drops every resting order, ahead of a feed snapshot replay |
 | `OnSnapshot()` | aggregates the top ten price levels per side into a `nlib::book` |
 
@@ -133,6 +133,23 @@ cd ui && npm install && npm run dev   # http://localhost:3000
 ```
 
 ## Releases
+
+### v0.3.1 — 2026-08-22
+
+Cancels became partial, following nlib's split of the action quantities.
+
+- **`OnCancel()` shrinks rather than erases.** It takes `o.cancel_qty` out of
+  the resting order and removes it only when nothing remains — the same path
+  `OnTrade()` already used. Kraken reports one quantity per delete, so a full
+  cancel is just the case where that quantity is the whole remainder.
+- **`OnModify()` reads `o.new_qty`** instead of overloading `o.qty`, which now
+  means the resting quantity and nothing else.
+- **The orders Parquet file gains `cancel_qty` and `new_qty`**, both after
+  `qty`. Readers that index columns by position rather than by name need
+  updating; files written before this release have ten columns, not twelve.
+- **nlib bumped** to `1377010` for those fields. `nlib::order` grows from 72
+  to 88 bytes, so a publisher on the old layout and this service cannot be
+  mixed — rebuild both.
 
 ### v0.3.0 — 2026-08-18
 

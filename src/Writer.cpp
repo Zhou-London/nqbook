@@ -68,6 +68,8 @@ class OrderSink {
                                arrow::field("order_id", arrow::int64()),
                                arrow::field("price", arrow::int64()),
                                arrow::field("qty", arrow::int64()),
+                               arrow::field("cancel_qty", arrow::int64()),
+                               arrow::field("new_qty", arrow::int64()),
                                arrow::field("event_ns", arrow::int64()),
                                arrow::field("recv_ns", arrow::int64()),
                                arrow::field("instrument_id", arrow::uint32()),
@@ -83,6 +85,8 @@ class OrderSink {
     order_id_.UnsafeAppend(o.order_id);
     price_.UnsafeAppend(o.price);
     qty_.UnsafeAppend(o.qty);
+    cancel_qty_.UnsafeAppend(o.cancel_qty);
+    new_qty_.UnsafeAppend(o.new_qty);
     event_ns_.UnsafeAppend(o.event_ns);
     recv_ns_.UnsafeAppend(o.recv_ns);
     instrument_id_.UnsafeAppend(o.instrument_id);
@@ -94,17 +98,19 @@ class OrderSink {
 
   void Flush() {
     if (rows_ == 0) return;
-    std::vector<std::shared_ptr<arrow::Array>> columns(10);
+    std::vector<std::shared_ptr<arrow::Array>> columns(12);
     Check(seq_.Finish(&columns[0]));
     Check(order_id_.Finish(&columns[1]));
     Check(price_.Finish(&columns[2]));
     Check(qty_.Finish(&columns[3]));
-    Check(event_ns_.Finish(&columns[4]));
-    Check(recv_ns_.Finish(&columns[5]));
-    Check(instrument_id_.Finish(&columns[6]));
-    Check(side_.Finish(&columns[7]));
-    Check(type_.Finish(&columns[8]));
-    Check(action_.Finish(&columns[9]));
+    Check(cancel_qty_.Finish(&columns[4]));
+    Check(new_qty_.Finish(&columns[5]));
+    Check(event_ns_.Finish(&columns[6]));
+    Check(recv_ns_.Finish(&columns[7]));
+    Check(instrument_id_.Finish(&columns[8]));
+    Check(side_.Finish(&columns[9]));
+    Check(type_.Finish(&columns[10]));
+    Check(action_.Finish(&columns[11]));
     Check(writer_->WriteRecordBatch(
         *arrow::RecordBatch::Make(schema_, std::exchange(rows_, 0), std::move(columns))));
     Reserve();
@@ -119,14 +125,16 @@ class OrderSink {
   void Reserve() {
     for (arrow::ArrayBuilder* b :
          std::initializer_list<arrow::ArrayBuilder*>{&seq_, &order_id_, &price_, &qty_,
-                                                     &event_ns_, &recv_ns_, &instrument_id_,
-                                                     &side_, &type_, &action_})
+                                                     &cancel_qty_, &new_qty_, &event_ns_,
+                                                     &recv_ns_, &instrument_id_, &side_,
+                                                     &type_, &action_})
       Check(b->Reserve(kBatchRows));
   }
 
   std::shared_ptr<arrow::Schema> schema_;
   std::unique_ptr<parquet::arrow::FileWriter> writer_;
-  arrow::Int64Builder seq_, order_id_, price_, qty_, event_ns_, recv_ns_;
+  arrow::Int64Builder seq_, order_id_, price_, qty_, cancel_qty_, new_qty_, event_ns_,
+      recv_ns_;
   arrow::UInt32Builder instrument_id_;
   arrow::UInt8Builder side_, type_, action_;
   std::int64_t rows_ = 0;  // rows in the open batch

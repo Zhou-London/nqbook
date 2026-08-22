@@ -29,12 +29,14 @@ class Orderbook {
   // book once fully filled. Ids that never rested are skipped.
   void OnTrade(const nlib::trade& t);
 
-  // Removes order o.order_id from the book. Unknown ids are ignored.
+  // Takes o.cancel_qty out of order o.order_id; at nothing remaining the
+  // order leaves the book. Unknown ids are ignored.
   void OnCancel(const nlib::order& o);
 
-  // Sets order o.order_id's remaining quantity to o.qty, keeping its queue
-  // position while o.price is unchanged and re-queueing it at the back of its
-  // new price level otherwise; o.qty <= 0 removes it. Unknown ids are ignored.
+  // Sets order o.order_id's remaining quantity to o.new_qty, keeping its
+  // queue position while o.price is unchanged and re-queueing it at the back
+  // of its new price level otherwise; o.new_qty <= 0 removes it. Unknown ids
+  // are ignored.
   void OnModify(const nlib::order& o);
 
   // Drops every resting order; `o` carries only the times and instrument.

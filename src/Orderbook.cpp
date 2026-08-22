@@ -25,8 +25,7 @@ void Orderbook::OnTrade(const nlib::trade& t) {
 
 void Orderbook::OnCancel(const nlib::order& o) {
   Touch(o.instrument_id, o.event_ns, o.recv_ns);
-  const auto it = by_id_.find(o.order_id);
-  if (it != by_id_.end()) Erase(it->second);
+  Reduce(o.order_id, o.cancel_qty);
 }
 
 void Orderbook::OnModify(const nlib::order& o) {
@@ -34,14 +33,14 @@ void Orderbook::OnModify(const nlib::order& o) {
   const auto it = by_id_.find(o.order_id);
   if (it == by_id_.end()) return;
   nlib::order* n = it->second;
-  if (o.qty <= 0) {
+  if (o.new_qty <= 0) {
     Erase(n);
   } else if (n->price == o.price) {
-    n->qty = o.qty;
+    n->qty = o.new_qty;
   } else {
     Unlink(n);
     n->price = o.price;
-    n->qty = o.qty;
+    n->qty = o.new_qty;
     Link(n);
   }
 }
