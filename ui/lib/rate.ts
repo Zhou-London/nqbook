@@ -6,7 +6,7 @@
 export const RATE_WINDOW_MS = 1000;
 
 /**
- * Sum of increments over the trailing RATE_WINDOW_MS of wall time.
+ * Sums the increments that arrived in the trailing RATE_WINDOW_MS.
  *
  * A deque of (arrival timestamp, increment) pairs: push appends at the tail,
  * and every push or read first evicts expired entries from the head while

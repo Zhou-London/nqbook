@@ -4,3 +4,5 @@ data_out/
 .cache/
 
 .DS_Store
+
+.claude/settings.local.json

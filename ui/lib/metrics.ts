@@ -1,8 +1,8 @@
-// Decodes nlib::metrics — the 120-byte little-endian record nqbook's metrics
+// Decodes nlib::metrics — the 136-byte little-endian record nqbook's metrics
 // thread publishes — into a plain object. Counters are cumulative since
 // process start; consumers difference consecutive samples for rates.
 
-export const METRICS_SIZE = 120;
+export const METRICS_SIZE = 136;
 
 export interface MetricsSample {
   /** Sample time, Unix-epoch nanoseconds. Rounded through a double, so good
@@ -12,6 +12,7 @@ export interface MetricsSample {
   feedBytes: number;
   feedOrders: number;
   feedTrades: number;
+  feedLevels: number;
   feedDropped: number;
   bookEvents: number;
   bookApplyNs: number;
@@ -21,6 +22,7 @@ export interface MetricsSample {
   bookMemoryBytes: number;
   writerOrders: number;
   writerTrades: number;
+  writerLevels: number;
   writerBooks: number;
 }
 
@@ -32,15 +34,17 @@ export function decode(frame: Buffer): MetricsSample {
     feedBytes: u(16),
     feedOrders: u(24),
     feedTrades: u(32),
-    feedDropped: u(40),
-    bookEvents: u(48),
-    bookApplyNs: u(56),
-    bookSamples: u(64),
-    bookInstruments: u(72),
-    bookRestingOrders: u(80),
-    bookMemoryBytes: u(88),
-    writerOrders: u(96),
-    writerTrades: u(104),
-    writerBooks: u(112),
+    feedLevels: u(40),
+    feedDropped: u(48),
+    bookEvents: u(56),
+    bookApplyNs: u(64),
+    bookSamples: u(72),
+    bookInstruments: u(80),
+    bookRestingOrders: u(88),
+    bookMemoryBytes: u(96),
+    writerOrders: u(104),
+    writerTrades: u(112),
+    writerLevels: u(120),
+    writerBooks: u(128),
   };
 }

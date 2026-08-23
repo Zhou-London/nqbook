@@ -1,0 +1,23 @@
+feed:
+  # ZMQ SUB endpoint the feed stage connects to.
+  endpoint: tcp://host.docker.internal:5555
+  # Events the feed stage may queue ahead of the book stage.
+  queue_capacity: 16384
+
+book:
+  # Interval between the snapshots the book stage emits.
+  snapshot_period_ms: 3000
+  # Records the book stage may queue ahead of the writer stage.
+  queue_capacity: 16384
+
+writer:
+  # Directory holding the Parquet files, created when missing.
+  out_dir: data_out
+  # Rows buffered per file before the writer stage writes a row group.
+  batch_rows: 1024
+
+metrics:
+  # ZMQ PUB endpoint the metrics stage binds.
+  endpoint: tcp://0.0.0.0:5556
+  # Interval between metric samples.
+  sample_period_ms: 100

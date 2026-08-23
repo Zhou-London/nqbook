@@ -1,16 +1,12 @@
-#include <Metrics.h>
+#include <Threads/MetricsThread.h>
 
 #include <chrono>
 #include <thread>
 
 #include <nlib/common.h>
-#include <zmq.hpp>
 
 namespace nq {
 namespace {
-
-// The publish cadence, and how long a stop request can go unnoticed.
-constexpr auto kSamplePeriod = std::chrono::milliseconds(100);
 
 nlib::metrics Read(const Metrics& m) {
   return {
@@ -21,6 +17,7 @@ nlib::metrics Read(const Metrics& m) {
       .feed_bytes = m.feed_bytes.Read(),
       .feed_orders = m.feed_orders.Read(),
       .feed_trades = m.feed_trades.Read(),
+      .feed_levels = m.feed_levels.Read(),
       .feed_dropped = m.feed_dropped.Read(),
       .book_events = m.book_events.Read(),
       .book_apply_ns = m.book_apply_ns.Read(),
@@ -30,26 +27,30 @@ nlib::metrics Read(const Metrics& m) {
       .book_memory_bytes = m.book_memory_bytes.Read(),
       .writer_orders = m.writer_orders.Read(),
       .writer_trades = m.writer_trades.Read(),
+      .writer_levels = m.writer_levels.Read(),
       .writer_books = m.writer_books.Read(),
   };
 }
 
-}  // namespace
+}
 
-void RunMetrics(const Metrics& m, const std::string& endpoint, std::stop_token stop) {
-  zmq::context_t ctx;
-  zmq::socket_t pub(ctx, zmq::socket_type::pub);
-  // Conflation keeps only the newest sample per subscriber: a slow or absent
-  // reader never accumulates a backlog, and every delivery is current.
-  pub.set(zmq::sockopt::conflate, 1);
-  pub.set(zmq::sockopt::linger, 0);
-  pub.bind(endpoint);
-
+void MetricsThread::Run(const Metrics& metrics, std::stop_token stop) {
+  Bind();
   while (!stop.stop_requested()) {
-    std::this_thread::sleep_for(kSamplePeriod);
-    const nlib::metrics sample = Read(m);
-    pub.send(zmq::const_buffer(&sample, sizeof sample), zmq::send_flags::none);
+    std::this_thread::sleep_for(sample_period_);
+    Publish(metrics);
   }
 }
 
-}  // namespace nq
+void MetricsThread::Bind() {
+  pub_.set(zmq::sockopt::conflate, 1);
+  pub_.set(zmq::sockopt::linger, 0);
+  pub_.bind(endpoint_);
+}
+
+void MetricsThread::Publish(const Metrics& metrics) {
+  const nlib::metrics sample = Read(metrics);
+  pub_.send(zmq::const_buffer(&sample, sizeof sample), zmq::send_flags::none);
+}
+
+}

@@ -1,7 +1,7 @@
 # nqbook-ui
 
 Live dashboard for `nqbook`'s metrics stream. A Next.js server route
-subscribes to the service's conflating ZMQ PUB socket, decodes each 120-byte
+subscribes to the service's conflating ZMQ PUB socket, decodes each 136-byte
 `nlib::metrics` record, and relays it to the browser over Server-Sent Events;
 the page keeps a rolling minute of samples and plots counters as per-second
 rates over a sliding 1 s wall-clock window. White surface, one blue for every
@@ -23,7 +23,7 @@ both `npm run dev` and `npm run start` pin port 3000.
 ## Shape
 
 ```
-lib/metrics.ts            nlib::metrics decoder (120 bytes, little-endian)
+lib/metrics.ts            nlib::metrics decoder (136 bytes, little-endian)
 lib/rate.ts               SlidingRate: windowed sum over arrival timestamps
 app/api/metrics/route.ts  SSE bridge: one conflated ZMQ SUB per client
 app/page.tsx              the dashboard: rolling window, rates, sparklines

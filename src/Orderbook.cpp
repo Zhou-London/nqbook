@@ -11,10 +11,13 @@ namespace nq {
 void Orderbook::OnOrder(const nlib::order& o) {
   if (o.action != nlib::order_action::add || o.type != nlib::order_type::limit) return;
   Touch(o.instrument_id, o.event_ns, o.recv_ns);
+
+  // Drops if already exists
   if (by_id_.contains(o.order_id)) return;
+
   nlib::order* n = &*orders_.emplace(o);
   by_id_.try_emplace(std::int64_t{o.order_id}, n);
-  Link(n);
+  LinkOrders(n);
 }
 
 void Orderbook::OnTrade(const nlib::trade& t) {
@@ -36,12 +39,13 @@ void Orderbook::OnModify(const nlib::order& o) {
   if (o.new_qty <= 0) {
     Erase(n);
   } else if (n->price == o.price) {
+    FindLevel(n).qty += o.new_qty - n->qty;
     n->qty = o.new_qty;
   } else {
-    Unlink(n);
+    UnlinkOrders(n);
     n->price = o.price;
     n->qty = o.new_qty;
-    Link(n);
+    LinkOrders(n);
   }
 }
 
@@ -49,7 +53,18 @@ void Orderbook::OnClear(const nlib::order& o) {
   Touch(o.instrument_id, o.event_ns, o.recv_ns);
   orders_.clear();
   by_id_.clear();
-  bid_head_ = ask_head_ = nullptr;
+  bids_.clear();
+  asks_.clear();
+}
+
+void Orderbook::OnLevel(const nlib::level& l) {
+  Touch(l.instrument_id, l.event_ns, l.recv_ns);
+  PriceLevelMap& level = (l.side == nlib::side::buy) ? bids_ : asks_;
+  if (l.qty <= 0) {
+    level.erase(l.price);
+    return;
+  }
+  level.try_emplace(l.price).first->second.qty = l.qty;
 }
 
 nlib::book Orderbook::OnSnapshot() const {
@@ -57,14 +72,28 @@ nlib::book Orderbook::OnSnapshot() const {
   b.event_ns = event_ns_;
   b.recv_ns = recv_ns_;
   b.instrument_id = instrument_id_;
-  FillSide(bid_head_, b.bid_price, b.bid_qty);
-  FillSide(ask_head_, b.ask_price, b.ask_qty);
+  // Bids walk in reverse and asks forward, so both start at the best level.
+  std::size_t level_idx = 0;
+  for (auto it = bids_.rbegin(); it != bids_.rend() && level_idx < nlib::book_depth; ++it, ++level_idx) {
+    b.bid_price[level_idx] = it->first;
+    b.bid_qty[level_idx] = it->second.qty;
+  }
+  level_idx = 0;
+  for (auto it = asks_.begin(); it != asks_.end() && level_idx < nlib::book_depth; ++it, ++level_idx) {
+    b.ask_price[level_idx] = it->first;
+    b.ask_qty[level_idx] = it->second.qty;
+  }
   return b;
 }
 
 std::size_t Orderbook::MemoryBytes() const {
+  // Approximates a tree node as the payload plus three child/parent pointers
+  // and color, rounded to four words.
+  constexpr std::size_t kLevelNode =
+      sizeof(std::pair<const std::int64_t, nlib::price_level>) + 4 * sizeof(void*);
   return orders_.capacity() * sizeof(nlib::order) +
-         by_id_.capacity() * (sizeof(std::pair<std::int64_t, nlib::order*>) + 1);
+         by_id_.capacity() * (sizeof(std::pair<std::int64_t, nlib::order*>) + 1) +
+         (bids_.size() + asks_.size()) * kLevelNode;
 }
 
 void Orderbook::Touch(std::uint32_t instrument_id, std::int64_t event_ns, std::int64_t recv_ns) {
@@ -73,31 +102,28 @@ void Orderbook::Touch(std::uint32_t instrument_id, std::int64_t event_ns, std::i
   recv_ns_ = recv_ns;
 }
 
-void Orderbook::Link(nlib::order* n) {
-  const bool buy = n->side == nlib::side::buy;
-  nlib::order*& head = buy ? bid_head_ : ask_head_;
-  nlib::order* prev = nullptr;
-  nlib::order* cur = head;
-  // Walks past every order of better or equal price priority, so `n` lands
-  // behind its own level and ahead of every worse one.
-  while (cur && (buy ? cur->price >= n->price : cur->price <= n->price)) {
-    prev = cur;
-    cur = cur->next;
-  }
-  n->prev = prev;
-  n->next = cur;
-  (prev ? prev->next : head) = n;
-  if (cur) cur->prev = n;
+void Orderbook::LinkOrders(nlib::order* n) {
+  PriceLevelMap& side = n->side == nlib::side::buy ? bids_ : asks_;
+  nlib::price_level& lvl = side.try_emplace(n->price).first->second;
+  n->prev = lvl.tail;
+  n->next = nullptr;
+  (lvl.tail ? lvl.tail->next : lvl.head) = n;
+  lvl.tail = n;
+  lvl.qty += n->qty;
 }
 
-void Orderbook::Unlink(nlib::order* n) {
-  nlib::order*& head = (n->side == nlib::side::buy) ? bid_head_ : ask_head_;
-  (n->prev ? n->prev->next : head) = n->next;
-  if (n->next) n->next->prev = n->prev;
+void Orderbook::UnlinkOrders(nlib::order* n) {
+  PriceLevelMap& side = n->side == nlib::side::buy ? bids_ : asks_;
+  const auto it = side.find(n->price);
+  nlib::price_level& lvl = it->second;
+  (n->prev ? n->prev->next : lvl.head) = n->next;
+  (n->next ? n->next->prev : lvl.tail) = n->prev;
+  lvl.qty -= n->qty;
+  if (lvl.head == nullptr) side.erase(it);
 }
 
 void Orderbook::Erase(nlib::order* n) {
-  Unlink(n);
+  UnlinkOrders(n);
   by_id_.erase(by_id_.find(n->order_id));
   orders_.erase(orders_.get_iterator(n));
 }
@@ -106,17 +132,17 @@ void Orderbook::Reduce(std::int64_t order_id, std::int64_t qty) {
   const auto it = by_id_.find(order_id);
   if (it == by_id_.end()) return;
   nlib::order* n = it->second;
-  n->qty -= qty;
-  if (n->qty <= 0) Erase(n);
-}
-
-void Orderbook::FillSide(const nlib::order* n, std::int64_t* price, std::int64_t* qty) {
-  // The list is already price-ordered, so one level is the run of orders
-  // sharing the head price; the inner loop sums it and leaves `n` on the next.
-  for (std::size_t lvl = 0; n && lvl < nlib::book_depth; ++lvl) {
-    price[lvl] = n->price;
-    for (; n && n->price == price[lvl]; n = n->next) qty[lvl] += n->qty;
+  if (n->qty <= qty) {
+    Erase(n);
+  } else {
+    n->qty -= qty;
+    FindLevel(n).qty -= qty;
   }
 }
 
-}  // namespace nq
+nlib::price_level& Orderbook::FindLevel(nlib::order* n) {
+  PriceLevelMap& level_map = n->side == nlib::side::buy ? bids_ : asks_;
+  return level_map.find(n->price)->second;
+}
+
+}

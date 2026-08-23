@@ -22,12 +22,14 @@ const COUNTER_KEYS = [
   "feedBytes",
   "feedOrders",
   "feedTrades",
+  "feedLevels",
   "feedDropped",
   "bookEvents",
   "bookApplyNs",
   "bookSamples",
   "writerOrders",
   "writerTrades",
+  "writerLevels",
   "writerBooks",
 ] as const;
 
@@ -141,7 +143,7 @@ function Sparkline({
   format: (v: number) => string;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const width = 100; // viewBox units; the SVG stretches to the tile
+  const width = 100;
 
   const { path, area, min, max, ys } = useMemo(() => {
     if (points.length < 2) return { path: "", area: "", min: 0, max: 0, ys: [] as number[] };
@@ -262,12 +264,14 @@ export default function Page() {
       feedBytes: series(rates, "feedBytes"),
       feedOrders: series(rates, "feedOrders"),
       feedTrades: series(rates, "feedTrades"),
+      feedLevels: series(rates, "feedLevels"),
       feedDropped: series(rates, "feedDropped"),
       bookEvents: series(rates, "bookEvents"),
       bookApplyMeanNs: series(rates, "bookApplyMeanNs"),
       bookSamples: series(rates, "bookSamples"),
       writerOrders: series(rates, "writerOrders"),
       writerTrades: series(rates, "writerTrades"),
+      writerLevels: series(rates, "writerLevels"),
       writerBooks: series(rates, "writerBooks"),
     }),
     [rates],
@@ -308,6 +312,7 @@ export default function Page() {
             <Tile label="Feed bytes" points={r.feedBytes} format={fmtBytes} unit="/s" />
             <Tile label="Feed orders" points={r.feedOrders} format={fmtCount} unit="/s" />
             <Tile label="Feed trades" points={r.feedTrades} format={fmtCount} unit="/s" />
+            <Tile label="Feed levels" points={r.feedLevels} format={fmtCount} unit="/s" />
             <Tile label="Dropped frames" points={r.feedDropped} format={fmtCount} unit="/s" />
           </div>
 
@@ -325,6 +330,7 @@ export default function Page() {
           <div className="grid">
             <Tile label="Writer orders" points={r.writerOrders} format={fmtCount} unit="/s" />
             <Tile label="Writer trades" points={r.writerTrades} format={fmtCount} unit="/s" />
+            <Tile label="Writer levels" points={r.writerLevels} format={fmtCount} unit="/s" />
             <Tile label="Writer books" points={r.writerBooks} format={fmtCount} unit="/s" />
           </div>
 
