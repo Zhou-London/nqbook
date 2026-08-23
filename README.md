@@ -129,8 +129,8 @@ docker compose up          # equivalently, and Ctrl-C to drain and stop
 ```
 
 [`config/config.yaml`](config/config.yaml) holds the tunables: both endpoints,
-the output directory, the two queue capacities, the snapshot interval, and the
-metrics sample interval. `NQBOOK_CONFIG` names another file, a key left out
+the output directory, the two queue capacities, the writer's batch size, the
+snapshot interval, and the metrics sample interval. `NQBOOK_CONFIG` names another file, a key left out
 keeps its default, and a malformed file stops the process at startup.
 `nqbook [feed_endpoint] [out_dir] [metrics_endpoint]` and the
 `NQBOOK_FEED_ENDPOINT` / `NQBOOK_METRICS_ENDPOINT` variables override the file,
