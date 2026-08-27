@@ -1,6 +1,7 @@
 <img src="https://capsule-render.vercel.app/api?type=waving&height=400&text=Orderbook&fontAlign=80&fontAlignY=40&color=gradient" />
 
 <p align="center">
+  <img alt="Version 0.4.1" src="https://img.shields.io/badge/version-0.4.1-blue" />
   <img alt="C++23" src="https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white" />
   <img alt="CMake 3.28+" src="https://img.shields.io/badge/CMake-3.28%2B-064F8C?logo=cmake&logoColor=white" />
   <img alt="Depends on nlib" src="https://img.shields.io/badge/submodule-nlib-4c1?logo=git&logoColor=white" />
@@ -161,6 +162,21 @@ cd ui && npm install && npm run dev   # http://localhost:3000
 ```
 
 ## Releases
+
+### v0.4.1 — 2026-08-26
+
+Every header states its contracts again, and the nlib pin names a released
+version.
+
+- **Each stage and book member documents its contract at its declaration.**
+  `Config.h`, `Orderbook.h`, and the four headers under `Threads/` carry those
+  comments; the `.cpp` files comment mechanism only. The split into one file
+  per stage had left several declarations bare.
+- **nlib pinned at v0.4.0** (`aa13a64`). `common.h` is byte-identical to the
+  `4fc74f1` v0.4.0 shipped against, so every wire size and offset holds and no
+  peer needs rebuilding.
+- **`project(nqbook VERSION)` reads 0.4.1**, the version these release notes
+  count. It had stayed at 0.1.0 since the first commit.
 
 ### v0.4.0 — 2026-08-23
 
