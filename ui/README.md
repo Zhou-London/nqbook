@@ -1,5 +1,14 @@
 # nqbook-ui
 
+<p align="center">
+  <img alt="Next.js 15" src="https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white" />
+  <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" />
+  <img alt="TypeScript 5" src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white" />
+  <img alt="ZeroMQ SUB" src="https://img.shields.io/badge/ZeroMQ-SUB-DF0000?logo=zeromq&logoColor=white" />
+  <img alt="Transport: Server-Sent Events" src="https://img.shields.io/badge/transport-SSE-4c1" />
+  <img alt="Runs on the host" src="https://img.shields.io/badge/runs-on%20the%20host-blue" />
+</p>
+
 Live dashboard for `nqbook`'s metrics stream. A Next.js server route
 subscribes to the service's conflating ZMQ PUB socket, decodes each 136-byte
 `nlib::metrics` record, and relays it to the browser over Server-Sent Events;
