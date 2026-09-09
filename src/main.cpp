@@ -1,11 +1,12 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
-#include <cstdio>
-#include <cstdlib>
 #include <stop_token>
+#include <string>
 #include <string_view>
 #include <thread>
+
+#include <spdlog/spdlog.h>
 
 #include <Config.h>
 #include <Threads/BookThread.h>
@@ -14,67 +15,69 @@
 #include <Threads/WriterThread.h>
 
 namespace {
-
+// Global signal flag used to terminate the program
 std::atomic<bool> g_stop{false};
-
 void OnSignal(int) { g_stop.store(true); }
 
-}
+} // namespace
 
-int main(int argc, char** argv) {
-  const char* config_path = std::getenv("NQBOOK_CONFIG");
-  nq::Config config = nq::LoadConfig(config_path ? config_path : "config/config.yaml");
-  if (const char* v = std::getenv("NQBOOK_FEED_ENDPOINT")) config.feed_endpoint = v;
-  if (const char* v = std::getenv("NQBOOK_METRICS_ENDPOINT")) config.metrics_endpoint = v;
+int main() {
+  const nq::Config config = nq::LoadConfig("config/config.yaml");
+  spdlog::info("[Main]nqbook {} starting", NQBOOK_VERSION);
 
-  // Parse command line arguments
-  bool l2 = false;
-  for (int i = 1; i < argc;) {
-    if (std::string_view(argv[i]) == "--l2") {
-      l2 = true;
-      for (int j = i; j + 1 < argc; ++j) argv[j] = argv[j + 1];
-      --argc;
-    } else {
-      ++i;
-    }
-  }
-  if (argc > 1) config.feed_endpoint = argv[1];
-  if (argc > 2) config.out_dir = argv[2];
-  if (argc > 3) config.metrics_endpoint = argv[3];
+  spdlog::info("[Config]Book mode={}", config.l2 ? "Level2 Update" : "Market By Order");
+  spdlog::info("[Config]Feed subscribes to {}", config.feed_endpoint);
+  spdlog::info("[Config]Metrics publishes on {}", config.metrics_endpoint);
+  spdlog::info("[Config]Snapshot Period={}ms",
+               config.snapshot_period.count());
+  spdlog::info("[Config]Writer: Output Path={}",
+               config.out_dir.string());
+  spdlog::info("[Config]Metrics: Sampling Period={}ms",
+               config.sample_period.count());
+  spdlog::info("[Config]Cache Line Alignment={}",
+               NLIB_CACHE_LINE);
 
+  // Inits SPSC queue between threads
   nq::FeedQueue feed_queue(config.feed_queue_capacity);
   nq::RecordQueue record_queue(config.record_queue_capacity);
-  nq::Metrics metrics;
-  nq::FeedThread feed_stage(config.feed_endpoint, l2, feed_queue);
-  nq::BookThread book_stage(feed_queue, record_queue, config.snapshot_period);
-  nq::WriterThread writer_stage(record_queue, config.out_dir, config.batch_rows);
-  nq::MetricsThread metrics_stage(config.metrics_endpoint, config.sample_period);
+
+  // Inits threads
+  nq::FeedThread feed_thread(config.feed_endpoint, config.l2, feed_queue);
+  nq::BookThread book_thread(feed_queue, record_queue, config.snapshot_period);
+  nq::WriterThread writer_thread(record_queue, config.out_dir,
+                                 config.batch_rows);
+  nq::MetricsThread metrics_thread(config.metrics_endpoint,
+                                   config.sample_period);
+
+  nq::Metrics metrics; // Monitors performances
 
   std::signal(SIGINT, OnSignal);
   std::signal(SIGTERM, OnSignal);
 
-  std::jthread monitor(
-      [&](std::stop_token stop) { metrics_stage.Run(metrics, stop); });
-  std::jthread writer(
-      [&](std::stop_token stop) { writer_stage.Run(metrics, stop); });
-  std::jthread book(
-      [&](std::stop_token stop) { book_stage.Run(metrics, stop); });
-  std::jthread feed(
-      [&](std::stop_token stop) { feed_stage.Run(metrics, stop); });
+  std::jthread tMetrics(
+      [&](std::stop_token stop) { metrics_thread.Run(metrics, stop); });
+  std::jthread tWriter(
+      [&](std::stop_token stop) { writer_thread.Run(metrics, stop); });
+  std::jthread tBook(
+      [&](std::stop_token stop) { book_thread.Run(metrics, stop); });
+  std::jthread tFeed(
+      [&](std::stop_token stop) { feed_thread.Run(metrics, stop); });
 
-  std::printf("nqbook: feed %s%s, writing %s, metrics %s\n", config.feed_endpoint.c_str(),
-              l2 ? " (l2)" : "", config.out_dir.string().c_str(),
-              config.metrics_endpoint.c_str());
-  while (!g_stop.load()) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  spdlog::info("[Main]nqbook up");
 
-  feed.request_stop();
-  feed.join();
-  book.request_stop();
-  book.join();
-  writer.request_stop();
-  writer.join();
-  monitor.request_stop();
-  monitor.join();
-  std::printf("nqbook: stopped\n");
+  while (!g_stop.load())
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  spdlog::info("[Main]nqbook stopping");
+  tFeed.request_stop();
+  tFeed.join();
+  tBook.request_stop();
+  tBook.join();
+  tWriter.request_stop();
+  tWriter.join();
+  tMetrics.request_stop();
+  tMetrics.join();
+
+  spdlog::info("[Main]nqbook down");
   return 0;
 }

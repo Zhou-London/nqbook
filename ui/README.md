@@ -16,7 +16,7 @@ the page keeps a rolling minute of samples and plots counters as per-second
 rates over a sliding 1 s wall-clock window. White surface, one blue for every
 series; status colors mark only the connection state and the dropped counter.
 
-![The dashboard on a live Kraken feed](docs/dashboard.png)
+![The dashboard on a live feed](docs/dashboard.png)
 
 ```bash
 npm install
@@ -24,9 +24,9 @@ npm run dev                  # http://localhost:3000
 NQBOOK_METRICS_ENDPOINT=tcp://127.0.0.1:5556 npm run dev   # the default
 ```
 
-Run the stack first: `apps/util`'s `md/kraken` publishing on 5555, `nqbook`
-in the dev container with `-p 5556:5556` so its metrics socket is reachable
-from the host. This app runs on the host with Node, not in the container, and
+Run the stack first: a feed publisher on 5555, and `nqbook` in the dev
+container with `-p 5556:5556` so its metrics socket is reachable from the
+host. This app runs on the host with Node, not in the container, and
 both `npm run dev` and `npm run start` pin port 3000.
 
 ## Shape

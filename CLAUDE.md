@@ -18,6 +18,7 @@ endpoint, and queue size comes from `config/config.yaml`. See
 ```
 third_party/nlib/                  git submodule: containers, wire types, framing
 third_party/fkYAML/                vendored single-header YAML parser, MIT, v0.4.4
+third_party/spdlog/                vendored header-only logger, MIT, v1.17.0
 include/Config.h                   nq::Config: the tunables and their defaults
 src/Config.cpp                     reads config/config.yaml with fkYAML
 config/config.yaml                 the tunables the service ships with
@@ -41,11 +42,11 @@ ui/                                Next.js dashboard over the metrics stream; np
 Contracts live at the declarations in the headers; the `.cpp` files comment
 mechanism only.
 
-Wire types (`nlib::order`, `nlib::trade`, `nlib::level`, `nlib::book`), the
-variants over them (`nlib::feed_event`, `nlib::record`), the framing tags, and
-the `nlib::price_level` book node come from `<nlib/common.h>` — never redefine
-them here. To change one, edit nlib itself,
-commit there, then bump the submodule pointer in this repo.
+Wire types (`nlib::order`, `nlib::trade`, `nlib::cancel`, `nlib::level`,
+`nlib::book`), the variants over them (`nlib::feed_event`, `nlib::record`),
+the framing tags, and the `nlib::price_level` book node come from
+`<nlib/common.h>` — never redefine them here. To change one, edit nlib
+itself, commit there, then bump the submodule pointer in this repo.
 
 ## Build
 
@@ -53,8 +54,7 @@ C++ configures, builds, and runs only in the `dev` container (image built
 from `Dockerfiles/cpp-dev`, which carries Arrow/Parquet and ZMQ); the host
 has neither. A new system library means a package in that image first, which
 dates every image already in use — prefer a header-only library vendored
-under `third_party/`, the way fkYAML parses the config. The feed simulator
-(`apps/util/feed_sim.py`) runs on the host with uv.
+under `third_party/`, the way fkYAML parses the config.
 
 ```bash
 git submodule update --init
@@ -70,9 +70,8 @@ The nlib submodule sits at `third_party/nlib`. A clone holding it at any
 other path needs `git submodule sync && git submodule update --init` once —
 until that runs, `add_subdirectory(third_party/nlib)` fails to configure.
 
-Testing is end to end: publish a feed on the host — `uv run feed_sim.py` for a
-synthetic one, `md/kraken` for live Kraken level3 — run the service in the
-container (`--add-host=host.docker.internal:host-gateway`, or
+Testing is end to end: publish a feed on the host at `tcp://*:5555`, run the
+service in the container (`--add-host=host.docker.internal:host-gateway`, or
 `docker compose up`), stop it with SIGTERM, and inspect `data_out/*.parquet`
 (e.g. `uv run --with pyarrow python`). The dashboard is the live check on the
 pipeline while it runs. No gtest here (nlib carries the container
@@ -80,12 +79,11 @@ test suites).
 
 ## Conventions
 
-- Tunables live in `config/config.yaml` and reach a stage through its
-  constructor. `NQBOOK_CONFIG` names the file; the command line and the
-  environment override the endpoints and the output directory. A new tunable
-  is a `nq::Config` field with a default, never a constant in a hot path.
-  `--l2` is a run mode rather than a tunable: the command line carries it, and
-  `main` passes it straight to the feed stage.
+- Tunables live in `config/config.yaml` alone and reach a stage through its
+  constructor; `nqbook` takes no command-line argument and reads no
+  environment variable. A new tunable is a `nq::Config` field with a default,
+  never a constant in a hot path. `feed.l2` is a tunable like the rest:
+  `main` reads it off `Config` and passes it straight to the feed stage.
 - Storage and lookup build on nlib: `nlib::hive` owns order nodes (stable
   addresses), intrusive lists queue them inside `nlib::price_level` levels,
   and `nlib::map` indexes them by id.
@@ -100,10 +98,15 @@ test suites).
   Parquet call belongs in `ParquetWriter`; `WriterThread` only moves records
   into it. A new record type means one `Open*` and one `Append*` pair listing
   the same columns in the same order.
+- Logging goes through spdlog, never `printf`/`fprintf`: `info` for startup
+  and shutdown milestones, `warn` for a condition the service recovers from
+  on its own (a missing config file, a full queue), `critical` right before
+  an `abort()`.
 - The book runs on order flow or on `nlib::level` records, never on both.
-  `--l2` picks the mode at startup: the feed stage accepts level frames and
-  drops order flow, and `OnLevel()` writes a level's absolute quantity into an
-  aggregate `nlib::price_level` (empty order queue). Keep the two paths
+  `feed.l2` picks the mode at startup: the feed stage accepts level and trade
+  frames and drops order and cancel frames, and `OnLevel()` writes a level's
+  absolute quantity into an aggregate `nlib::price_level` (empty order
+  queue). Keep the two paths
   separate rather than merging a level into an order-backed book.
 - New structs go to nlib's `common.h` only if they are reusable wire types;
   implementation types (intrusive nodes etc.) stay in this repo.

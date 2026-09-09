@@ -8,7 +8,7 @@
 namespace nq {
 namespace {
 
-nlib::metrics Read(const Metrics& m) {
+nlib::metrics Read(const Metrics &m) {
   return {
       .ts_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                    std::chrono::system_clock::now().time_since_epoch())
@@ -32,9 +32,9 @@ nlib::metrics Read(const Metrics& m) {
   };
 }
 
-}
+} // namespace
 
-void MetricsThread::Run(const Metrics& metrics, std::stop_token stop) {
+void MetricsThread::Run(const Metrics &metrics, std::stop_token stop) {
   Bind();
   while (!stop.stop_requested()) {
     std::this_thread::sleep_for(sample_period_);
@@ -48,9 +48,9 @@ void MetricsThread::Bind() {
   pub_.bind(endpoint_);
 }
 
-void MetricsThread::Publish(const Metrics& metrics) {
+void MetricsThread::Publish(const Metrics &metrics) {
   const nlib::metrics sample = Read(metrics);
   pub_.send(zmq::const_buffer(&sample, sizeof sample), zmq::send_flags::none);
 }
 
-}
+} // namespace nq

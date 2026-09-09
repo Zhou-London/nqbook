@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(nqbook
-    VERSION 0.4.1
+    VERSION 0.5.0
     LANGUAGES CXX
 )
 
@@ -30,6 +30,9 @@ add_executable(nqbook
 target_include_directories(nqbook PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+)
+target_compile_definitions(nqbook PRIVATE
+    NQBOOK_VERSION="${PROJECT_VERSION}"
 )
 target_link_libraries(nqbook PRIVATE
     nlib::nlib

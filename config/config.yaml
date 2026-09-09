@@ -1,6 +1,8 @@
 feed:
   # ZMQ SUB endpoint the feed stage connects to.
   endpoint: tcp://host.docker.internal:5555
+  # Runs the book on level records instead of order flow.
+  l2: false
   # Events the feed stage may queue ahead of the book stage.
   queue_capacity: 16384
 

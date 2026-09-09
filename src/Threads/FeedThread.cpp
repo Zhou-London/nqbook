@@ -10,6 +10,7 @@
 #include <variant>
 
 #include <nlib/common.h>
+#include <spdlog/spdlog.h>
 
 namespace nq {
 namespace {
@@ -23,15 +24,16 @@ std::int64_t RecvTimeNs() {
 }
 
 // Decodes one framed record, gated by the process modality: with l2 the feed
-// accepts level, trade, and clear records; without it, everything but level
-// records. Rejected frames count as dropped.
-std::optional<nlib::feed_event> Decode(const zmq::message_t& msg, std::int64_t recv_ns,
-                                       bool l2) {
-  const auto* bytes = static_cast<const unsigned char*>(msg.data());
+// accepts level and trade records; without it, everything but level records.
+// Rejected frames count as dropped.
+std::optional<nlib::feed_event> Decode(const zmq::message_t &msg,
+                                       std::int64_t recv_ns, bool l2) {
+  const auto *bytes = static_cast<const unsigned char *>(msg.data());
   if (msg.size() == 1 + sizeof(nlib::order) && bytes[0] == nlib::order_tag) {
+    if (l2)
+      return std::nullopt;
     nlib::order o;
     std::memcpy(&o, bytes + 1, sizeof o);
-    if (l2 && o.action != nlib::order_action::clear) return std::nullopt;
     o.prev = o.next = nullptr;
     o.recv_ns = recv_ns;
     return o;
@@ -43,22 +45,32 @@ std::optional<nlib::feed_event> Decode(const zmq::message_t& msg, std::int64_t r
     return t;
   }
   if (msg.size() == 1 + sizeof(nlib::level) && bytes[0] == nlib::level_tag) {
-    if (!l2) return std::nullopt;
+    if (!l2)
+      return std::nullopt;
     nlib::level l;
     std::memcpy(&l, bytes + 1, sizeof l);
     l.recv_ns = recv_ns;
     return l;
   }
+  if (msg.size() == 1 + sizeof(nlib::cancel) && bytes[0] == nlib::cancel_tag) {
+    if (l2)
+      return std::nullopt;
+    nlib::cancel c;
+    std::memcpy(&c, bytes + 1, sizeof c);
+    c.recv_ns = recv_ns;
+    return c;
+  }
   return std::nullopt;
 }
 
-}
+} // namespace
 
-void FeedThread::Run(Metrics& metrics, std::stop_token stop) {
+void FeedThread::Run(Metrics &metrics, std::stop_token stop) {
   Connect();
   zmq::message_t msg;
   while (!stop.stop_requested()) {
-    if (Receive(msg)) Consume(msg, metrics, stop);
+    if (Receive(msg))
+      Consume(msg, metrics, stop);
   }
 }
 
@@ -69,16 +81,18 @@ void FeedThread::Connect() {
   sub_.connect(endpoint_);
 }
 
-bool FeedThread::Receive(zmq::message_t& msg) {
+bool FeedThread::Receive(zmq::message_t &msg) {
   try {
     return sub_.recv(msg, zmq::recv_flags::none).has_value();
-  } catch (const zmq::error_t& e) {
-    if (e.num() == EINTR) return false;
+  } catch (const zmq::error_t &e) {
+    if (e.num() == EINTR)
+      return false;
     throw;
   }
 }
 
-void FeedThread::Consume(const zmq::message_t& msg, Metrics& metrics, std::stop_token stop) {
+void FeedThread::Consume(const zmq::message_t &msg, Metrics &metrics,
+                         std::stop_token stop) {
   metrics.feed_messages.Add();
   metrics.feed_bytes.Add(msg.size());
   std::optional<nlib::feed_event> e = Decode(msg, RecvTimeNs(), l2_);
@@ -86,18 +100,22 @@ void FeedThread::Consume(const zmq::message_t& msg, Metrics& metrics, std::stop_
     metrics.feed_dropped.Add();
     return;
   }
-  (std::holds_alternative<nlib::order>(*e)   ? metrics.feed_orders
-   : std::holds_alternative<nlib::trade>(*e) ? metrics.feed_trades
-                                             : metrics.feed_levels)
-      .Add();
-  Forward(std::move(*e), stop);
-}
 
-void FeedThread::Forward(nlib::feed_event&& e, std::stop_token stop) {
-  while (!feed_queue_.try_push(std::move(e))) {
-    if (stop.stop_requested()) return;
+  // Cancel Order also counts as order
+  (std::holds_alternative<nlib::trade>(*e)   ? metrics.feed_trades
+   : std::holds_alternative<nlib::level>(*e) ? metrics.feed_levels
+                                             : metrics.feed_orders)
+      .Add();
+
+  if (feed_queue_.try_push(std::move(*e)))
+    return;
+  spdlog::warn("feed queue full ({} slots)", feed_queue_.capacity());
+  // Waits while the queue is full; a stop request abandons the event.
+  while (!feed_queue_.try_push(std::move(*e))) {
+    if (stop.stop_requested())
+      return;
     std::this_thread::sleep_for(std::chrono::microseconds(50));
   }
 }
 
-}
+} // namespace nq

@@ -11,13 +11,13 @@
 
 namespace nq {
 
-WriterThread::WriterThread(RecordQueue& in, std::filesystem::path dir,
+WriterThread::WriterThread(RecordQueue &in, std::filesystem::path dir,
                            std::int64_t batch_rows)
     : record_queue_(in), dir_(std::move(dir)), batch_rows_(batch_rows) {}
 
 WriterThread::~WriterThread() = default;
 
-void WriterThread::Run(Metrics& metrics, std::stop_token stop) {
+void WriterThread::Run(Metrics &metrics, std::stop_token stop) {
   Open();
   while (!stop.stop_requested()) {
     if (std::optional<nlib::record> r = record_queue_.try_pop())
@@ -31,26 +31,30 @@ void WriterThread::Run(Metrics& metrics, std::stop_token stop) {
 }
 
 void WriterThread::Open() {
-  const std::string stamp = std::format(
-      "{:%Y%m%dT%H%M%S}",
-      std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
+  const std::string stamp =
+      std::format("{:%Y%m%dT%H%M%S}", std::chrono::floor<std::chrono::seconds>(
+                                          std::chrono::system_clock::now()));
   writer_ = std::make_unique<ParquetWriter>(dir_, stamp, batch_rows_);
 }
 
-void WriterThread::Consume(nlib::record&& r, Metrics& metrics) {
-  std::visit(nlib::overloaded{[&](const nlib::order& o) {
+void WriterThread::Consume(nlib::record &&r, Metrics &metrics) {
+  std::visit(nlib::overloaded{[&](const nlib::order &o) {
                                 writer_->Add(o);
                                 metrics.writer_orders.Add();
                               },
-                              [&](const nlib::trade& t) {
+                              [&](const nlib::trade &t) {
                                 writer_->Add(t);
                                 metrics.writer_trades.Add();
                               },
-                              [&](const nlib::level& l) {
+                              [&](const nlib::cancel &c) {
+                                writer_->Add(c);
+                                metrics.writer_orders.Add();
+                              },
+                              [&](const nlib::level &l) {
                                 writer_->Add(l);
                                 metrics.writer_levels.Add();
                               },
-                              [&](const nlib::book& b) {
+                              [&](const nlib::book &b) {
                                 writer_->Add(b);
                                 metrics.writer_books.Add();
                               }},
@@ -59,4 +63,4 @@ void WriterThread::Consume(nlib::record&& r, Metrics& metrics) {
 
 void WriterThread::Close() { writer_->Close(); }
 
-}
+} // namespace nq
