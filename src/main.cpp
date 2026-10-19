@@ -213,8 +213,25 @@ int main(int argc, char** argv) {
     check->add_flag("--fill-gaps", opt.fill_gaps, "Time samplers emit a row for every empty bar");
     check->add_option("--format", opt.format, "Output format")->check(CLI::IsMember({"text", "json"}));
 
+    std::string help_topic;
+    CLI::App* help = app.add_subcommand("help", "Print help for nqbook or for a subcommand");
+    help->add_option("subcommand", help_topic, "Subcommand to describe");
+
     CLI11_PARSE(app, argc, argv);
 
+    if (help->parsed()) {
+        if (help_topic.empty()) {
+            std::printf("%s", app.get_formatter()->make_help(&app, app.get_name(), CLI::AppFormatMode::Normal).c_str());
+            return kOk;
+        }
+        try {
+            std::printf("%s", app.get_subcommand(help_topic)->help(app.get_name()).c_str());
+            return kOk;
+        } catch (const CLI::OptionNotFound&) {
+            std::fprintf(stderr, "nqbook: unknown subcommand '%s'\n", help_topic.c_str());
+            return static_cast<int>(CLI::ExitCodes::OptionNotFound);
+        }
+    }
     if (check->parsed()) return Check(opt);
     return kOk;
 }

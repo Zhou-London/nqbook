@@ -144,6 +144,12 @@ static int TestCli(const fs::path& tmp) {
     CHECK(r.code >= 100);
     r = Run("check --help", tmp);
     CHECK(r.code == 0 && Has(r.out, "--plugin-dir"));
+    r = Run("help", tmp);
+    CHECK(r.code == 0 && Has(r.out, "SUBCOMMANDS") && Has(r.out, "check"));
+    r = Run("help check", tmp);
+    CHECK(r.code == 0 && Has(r.out, "--plugin-dir"));
+    r = Run("help nope", tmp);
+    CHECK(r.code >= 100 && Has(r.err, "unknown subcommand"));
     return 0;
 }
 
