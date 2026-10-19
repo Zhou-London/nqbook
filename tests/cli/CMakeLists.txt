@@ -10,6 +10,7 @@ target_compile_definitions(cli_test PRIVATE
     NQBOOK_PATH="$<TARGET_FILE:nqbook>"
     NQ_TEST_PLUGIN_PATH="$<TARGET_FILE:nq_test_plugin>"
     NQ_FAKE_PLUGIN_PATH="$<TARGET_FILE:nq_fake_plugin>"
+    NQ_REPLAY_ADAPTER_PATH="$<TARGET_FILE:replay>"
 )
-add_dependencies(cli_test nqbook nq_test_plugin nq_fake_plugin)
+add_dependencies(cli_test nqbook nq_test_plugin nq_fake_plugin replay)
 add_test(NAME cli_test COMMAND cli_test)

@@ -1,0 +1,204 @@
+#include <Report.h>
+
+#include <memory>
+#include <stdexcept>
+#include <string_view>
+
+namespace nq {
+
+namespace {
+
+const char* RequiresName(std::uint8_t r) {
+    switch (r) {
+        case NQ_REQUIRES_L1: return "L1";
+        case NQ_REQUIRES_MBP: return "MBP";
+        case NQ_REQUIRES_MBO: return "MBO";
+    }
+    return "?";
+}
+
+const char* KindName(std::uint8_t k) { return k == NQ_COLUMN_CUMULATIVE ? "cumulative" : "snapshot"; }
+
+const char* TriggerName(Trigger t) {
+    switch (t) {
+        case Trigger::Time: return "time";
+        case Trigger::Events: return "events";
+        case Trigger::Trades: return "trades";
+    }
+    return "?";
+}
+
+std::string JsonString(std::string_view s) {
+    std::string out = "\"";
+    for (const char c : s) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\t': out += "\\t"; break;
+            default: out += c;
+        }
+    }
+    out += '"';
+    return out;
+}
+
+std::string CsvString(std::string_view s) {
+    if (s.find_first_of(",\"\n") == std::string_view::npos) return std::string(s);
+    std::string out = "\"";
+    for (const char c : s) {
+        if (c == '"') out += '"';
+        out += c;
+    }
+    out += '"';
+    return out;
+}
+
+}  // namespace
+
+void PrintPluginSetText(std::FILE* out, const PluginSet& plugins) {
+    std::fprintf(out, "plugins (%zu)\n", plugins.PluginCount());
+    for (std::size_t i = 0; i < plugins.PluginCount(); ++i) {
+        const auto& p = plugins.Plugin(i);
+        std::fprintf(out, "  %-16s %s  sdk=%s requires=%s cols=%u", plugins.PluginName(i).c_str(), p.Path().c_str(),
+                     p.Schema().sdk_version, RequiresName(p.Schema().requirement), p.Schema().ncol);
+        for (const auto& [k, v] : plugins.PluginParams(i)) std::fprintf(out, "  %s=%s", k.c_str(), v.c_str());
+        std::fprintf(out, "\n");
+    }
+
+    std::fprintf(out, "columns (%zu)\n", plugins.Columns().size());
+    for (const auto& c : plugins.Columns()) {
+        std::fprintf(out, "  %-32s %-10s %-10s %s\n", c.name.c_str(), c.unit.c_str(), KindName(c.kind), c.doc.c_str());
+    }
+
+    std::fprintf(out, "samplers (%zu)\n", plugins.Samplers().size());
+    for (const auto& t : plugins.Samplers()) {
+        const auto& s = t.spec;
+        std::fprintf(out, "  %-16s %s every=%lld%s fill_gaps=%s cols=%zu\n", s.name.c_str(), TriggerName(s.trigger),
+                     static_cast<long long>(s.every), s.trigger == Trigger::Time ? "ns" : "",
+                     s.fill_gaps ? "yes" : "no", t.columns.size());
+    }
+}
+
+void PrintPluginSetJson(std::FILE* out, const PluginSet& plugins) {
+    std::fprintf(out, "{\n  \"plugins\": [");
+    for (std::size_t i = 0; i < plugins.PluginCount(); ++i) {
+        const auto& p = plugins.Plugin(i);
+        std::fprintf(out, "%s\n    {\"name\": %s, \"path\": %s, \"sdk_version\": %s, \"requires\": \"%s\", \"ncol\": %u, \"params\": {",
+                     i ? "," : "", JsonString(plugins.PluginName(i)).c_str(), JsonString(p.Path()).c_str(),
+                     JsonString(p.Schema().sdk_version).c_str(), RequiresName(p.Schema().requirement),
+                     p.Schema().ncol);
+        const auto& params = plugins.PluginParams(i);
+        for (std::size_t j = 0; j < params.size(); ++j) {
+            std::fprintf(out, "%s%s: %s", j ? ", " : "", JsonString(params[j].first).c_str(),
+                         JsonString(params[j].second).c_str());
+        }
+        std::fprintf(out, "}}");
+    }
+    std::fprintf(out, "\n  ],\n  \"columns\": [");
+    for (std::size_t i = 0; i < plugins.Columns().size(); ++i) {
+        const auto& c = plugins.Columns()[i];
+        std::fprintf(out, "%s\n    {\"name\": %s, \"unit\": %s, \"kind\": \"%s\", \"doc\": %s, \"plugin\": %s}",
+                     i ? "," : "", JsonString(c.name).c_str(), JsonString(c.unit).c_str(), KindName(c.kind),
+                     JsonString(c.doc).c_str(), JsonString(plugins.PluginName(c.plugin_index)).c_str());
+    }
+    std::fprintf(out, "\n  ],\n  \"samplers\": [");
+    for (std::size_t i = 0; i < plugins.Samplers().size(); ++i) {
+        const auto& t = plugins.Samplers()[i];
+        const auto& s = t.spec;
+        std::fprintf(out, "%s\n    {\"name\": %s, \"trigger\": \"%s\", \"every\": %lld, \"fill_gaps\": %s, \"columns\": [",
+                     i ? "," : "", JsonString(s.name).c_str(), TriggerName(s.trigger),
+                     static_cast<long long>(s.every), s.fill_gaps ? "true" : "false");
+        for (std::size_t j = 0; j < t.names.size(); ++j) {
+            std::fprintf(out, "%s%s", j ? ", " : "", JsonString(t.names[j]).c_str());
+        }
+        std::fprintf(out, "]}");
+    }
+    std::fprintf(out, "\n  ]\n}\n");
+}
+
+void PrintFeedReport(std::FILE* out, const Market& market, const RunResult& result) {
+    const FeedStats& f = market.Stats();
+    std::fprintf(out, "feed  events=%llu instruments=%zu ts_regressions=%llu instrument_unknown=%llu stalls=%llu first_ts=%lld last_ts=%lld adapter_status=%d%s\n",
+                 static_cast<unsigned long long>(f.events), market.InstrumentCount(),
+                 static_cast<unsigned long long>(f.ts_regressions),
+                 static_cast<unsigned long long>(f.instrument_unknown),
+                 static_cast<unsigned long long>(result.stalls), static_cast<long long>(f.first_ts),
+                 static_cast<long long>(f.last_ts), result.adapter_status, result.interrupted ? " interrupted" : "");
+
+    Orderbook::Stats total;
+    for (const auto& [id, e] : market.Entries()) {
+        const Orderbook::Stats& s = e.pipeline->Book().GetStats();
+        total.adds += s.adds;
+        total.cancels += s.cancels;
+        total.modifies += s.modifies;
+        total.trades += s.trades;
+        total.clears += s.clears;
+        total.add_duplicate += s.add_duplicate;
+        total.cancel_unknown += s.cancel_unknown;
+        total.modify_unknown += s.modify_unknown;
+        total.trade_unknown += s.trade_unknown;
+        total.trade_over_order += s.trade_over_order;
+        total.trade_over_level += s.trade_over_level;
+        total.qty_invalid += s.qty_invalid;
+    }
+    auto print_stats = [&](const Orderbook::Stats& s) {
+        std::fprintf(out, "adds=%llu cancels=%llu modifies=%llu trades=%llu clears=%llu",
+                     static_cast<unsigned long long>(s.adds), static_cast<unsigned long long>(s.cancels),
+                     static_cast<unsigned long long>(s.modifies), static_cast<unsigned long long>(s.trades),
+                     static_cast<unsigned long long>(s.clears));
+        std::fprintf(out, " | add_duplicate=%llu cancel_unknown=%llu modify_unknown=%llu trade_unknown=%llu trade_over_order=%llu trade_over_level=%llu qty_invalid=%llu",
+                     static_cast<unsigned long long>(s.add_duplicate),
+                     static_cast<unsigned long long>(s.cancel_unknown),
+                     static_cast<unsigned long long>(s.modify_unknown),
+                     static_cast<unsigned long long>(s.trade_unknown),
+                     static_cast<unsigned long long>(s.trade_over_order),
+                     static_cast<unsigned long long>(s.trade_over_level),
+                     static_cast<unsigned long long>(s.qty_invalid));
+    };
+    std::fprintf(out, "book  ");
+    print_stats(total);
+    std::fprintf(out, "\n");
+
+    for (const auto& [id, e] : market.Entries()) {
+        const auto& spec = e.pipeline->Engine().Instrument();
+        const Orderbook& book = e.pipeline->Book();
+        std::fprintf(out, "  %-6u %-16s %s events=%llu ts_regressions=%llu orders=%zu bid_levels=%zu ask_levels=%zu  ",
+                     id, spec.symbol.c_str(), e.stats.resolved ? "" : "(unresolved)",
+                     static_cast<unsigned long long>(e.stats.events),
+                     static_cast<unsigned long long>(e.stats.ts_regressions), book.OrderCount(),
+                     book.BidLevelCount(), book.AskLevelCount());
+        print_stats(book.GetStats());
+        std::fprintf(out, "\n");
+    }
+}
+
+std::vector<std::filesystem::path> WriteSamplerCsv(const Market& market, const std::filesystem::path& dir) {
+    std::filesystem::create_directories(dir);
+    std::vector<std::filesystem::path> written;
+    const auto& templates = market.Plugins().Samplers();
+    for (std::size_t si = 0; si < templates.size(); ++si) {
+        const SamplerTemplate& t = templates[si];
+        const std::filesystem::path path = dir / (t.spec.name + ".csv");
+        std::unique_ptr<std::FILE, int (*)(std::FILE*)> f(std::fopen(path.string().c_str(), "w"), &std::fclose);
+        if (!f) throw std::runtime_error("cannot create " + path.string());
+
+        std::fprintf(f.get(), "instrument,symbol,ts");
+        for (const auto& n : t.names) std::fprintf(f.get(), ",%s", CsvString(n).c_str());
+        std::fprintf(f.get(), "\n");
+
+        for (const auto& [id, e] : market.Entries()) {
+            const std::string symbol = CsvString(e.pipeline->Engine().Instrument().symbol);
+            const RowBuffer& rows = e.pipeline->Engine().GetSampler(si).Rows();
+            for (std::size_t r = 0; r < rows.RowCount(); ++r) {
+                std::fprintf(f.get(), "%u,%s,%lld", id, symbol.c_str(), static_cast<long long>(rows.Ts(r)));
+                for (const double v : rows.Row(r)) std::fprintf(f.get(), ",%.17g", v);
+                std::fprintf(f.get(), "\n");
+            }
+        }
+        written.push_back(path);
+    }
+    return written;
+}
+
+}  // namespace nq

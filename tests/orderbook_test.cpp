@@ -10,11 +10,11 @@ using nlib::side;
 using nq::Orderbook;
 
 static mbo Add(std::uint64_t id, side s, std::int64_t p, std::int64_t q, std::int64_t ts = 1) {
-    return mbo{ts, id, p, q, s, action::add};
+    return mbo{ts, id, p, q, 0, s, action::add};
 }
-static mbo Cancel(std::uint64_t id, std::int64_t q = 0) { return mbo{2, id, 0, q, side::bid, action::cancel}; }
-static mbo Modify(std::uint64_t id, std::int64_t p, std::int64_t q) { return mbo{3, id, p, q, side::bid, action::modify}; }
-static mbo Trade(std::uint64_t id, side s, std::int64_t p, std::int64_t q) { return mbo{4, id, p, q, s, action::trade}; }
+static mbo Cancel(std::uint64_t id, std::int64_t q = 0) { return mbo{2, id, 0, q, 0, side::bid, action::cancel}; }
+static mbo Modify(std::uint64_t id, std::int64_t p, std::int64_t q) { return mbo{3, id, p, q, 0, side::bid, action::modify}; }
+static mbo Trade(std::uint64_t id, side s, std::int64_t p, std::int64_t q) { return mbo{4, id, p, q, 0, s, action::trade}; }
 
 #define CHECK(x) do { if (!(x)) { std::printf("FAIL line %d: %s\n", __LINE__, #x); return 1; } } while (0)
 
@@ -70,7 +70,7 @@ int main() {
     CHECK(ob.Apply(Trade(0, side::bid, 50, 5)) == 0);
     CHECK(ob.GetStats().trade_over_level == 2);
 
-    ob.Apply(mbo{9, 0, 0, 0, side::bid, action::clear});
+    ob.Apply(mbo{9, 0, 0, 0, 0, side::bid, action::clear});
     CHECK(ob.OrderCount() == 0 && ob.BestBid() == nullptr && ob.BestAsk() == nullptr);
 
     for (std::uint64_t i = 1; i <= 1000; ++i) ob.Apply(Add(i, side::ask, 200 + (i % 50), 1));

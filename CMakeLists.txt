@@ -30,13 +30,20 @@ add_library(nqbook_core STATIC
     src/Config.cpp
     src/Feature/BookAdapter.cpp
     src/Feature/Sampler.cpp
+    src/Feature/PluginSet.cpp
     src/Feature/FeatureEngine.cpp
+    src/Market.cpp
+    src/QueueSink.cpp
+    src/Runner.cpp
+    src/Report.cpp
 )
 target_include_directories(nqbook_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 target_link_libraries(nqbook_core PUBLIC nlib::nlib nqcppsdk::nqcppsdk ${CMAKE_DL_LIBS})
 target_compile_options(nqbook_core PRIVATE -Wall -Wextra -Wpedantic)
+
+add_subdirectory(adapters)
 
 add_executable(nqbook src/main.cpp)
 target_link_libraries(nqbook PRIVATE nqbook_core CLI11::CLI11)

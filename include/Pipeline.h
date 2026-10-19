@@ -6,14 +6,15 @@
 #include <nlib/common.h>
 
 #include <Feature/FeatureEngine.h>
+#include <Feature/PluginSet.h>
 #include <Orderbook.h>
 
 namespace nq {
 
 class Pipeline {
 public:
-    explicit Pipeline(InstrumentSpec spec, std::size_t expected_orders = 1 << 16)
-        : book_(expected_orders), engine_(book_, std::move(spec)) {}
+    Pipeline(const PluginSet& plugins, InstrumentSpec spec, std::size_t expected_orders = 1 << 16)
+        : book_(expected_orders), engine_(book_, plugins, std::move(spec)) {}
 
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;

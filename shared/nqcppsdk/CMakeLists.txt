@@ -6,8 +6,14 @@ project(nqcppsdk
 )
 
 file(SHA256 ${CMAKE_CURRENT_SOURCE_DIR}/nq/abi.h NQ_ABI_SHA256)
+file(SHA256 ${CMAKE_CURRENT_SOURCE_DIR}/nq/adapter_abi.h NQ_ADAPTER_ABI_FILE_SHA256)
+string(SHA256 NQ_ADAPTER_ABI_SHA256 "${NQ_ABI_SHA256}${NQ_ADAPTER_ABI_FILE_SHA256}")
 string(SUBSTRING "${NQ_ABI_SHA256}" 0 16 NQ_ABI_HASH_HEX)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/nq/abi.h)
+string(SUBSTRING "${NQ_ADAPTER_ABI_SHA256}" 0 16 NQ_ADAPTER_ABI_HASH_HEX)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/nq/abi.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/nq/adapter_abi.h
+)
 
 add_library(nqcppsdk INTERFACE)
 add_library(nqcppsdk::nqcppsdk ALIAS nqcppsdk)
@@ -15,8 +21,12 @@ target_include_directories(nqcppsdk INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
 )
 target_compile_features(nqcppsdk INTERFACE cxx_std_23)
-target_compile_definitions(nqcppsdk INTERFACE NQ_ABI_HASH=0x${NQ_ABI_HASH_HEX}ULL)
+target_compile_definitions(nqcppsdk INTERFACE
+    NQ_ABI_HASH=0x${NQ_ABI_HASH_HEX}ULL
+    NQ_ADAPTER_ABI_HASH=0x${NQ_ADAPTER_ABI_HASH_HEX}ULL
+)
 
 set(NQ_ABI_HASH "0x${NQ_ABI_HASH_HEX}" CACHE INTERNAL "")
+set(NQ_ADAPTER_ABI_HASH "0x${NQ_ADAPTER_ABI_HASH_HEX}" CACHE INTERNAL "")
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NqPlugin.cmake)

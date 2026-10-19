@@ -20,16 +20,16 @@ static std::int64_t Q(double x) { return static_cast<std::int64_t>(std::llround(
 static bool Near(double a, double b) { return std::fabs(a - b) < 1e-9; }
 
 static mbo Add(double t, std::uint64_t id, side s, double p, double q) {
-    return mbo{static_cast<std::int64_t>(t * kSec), id, P(p), Q(q), s, action::add};
+    return mbo{static_cast<std::int64_t>(t * kSec), id, P(p), Q(q), 0, s, action::add};
 }
 static mbo Cancel(double t, std::uint64_t id) {
-    return mbo{static_cast<std::int64_t>(t * kSec), id, 0, 0, side::bid, action::cancel};
+    return mbo{static_cast<std::int64_t>(t * kSec), id, 0, 0, 0, side::bid, action::cancel};
 }
 static mbo Trade(double t, std::uint64_t id, side s, double p, double q) {
-    return mbo{static_cast<std::int64_t>(t * kSec), id, P(p), Q(q), s, action::trade};
+    return mbo{static_cast<std::int64_t>(t * kSec), id, P(p), Q(q), 0, s, action::trade};
 }
 static mbo Clear(double t) {
-    return mbo{static_cast<std::int64_t>(t * kSec), 0, 0, 0, side::bid, action::clear};
+    return mbo{static_cast<std::int64_t>(t * kSec), 0, 0, 0, 0, side::bid, action::clear};
 }
 
 static bool RowIs(const nq::RowBuffer& rows, std::size_t i, double ts_sec, double spread, double mid,
@@ -60,34 +60,44 @@ static int TestAdapter() {
 }
 
 static int TestPipeline() {
-    nq::Pipeline pipe(nq::InstrumentSpec{"TEST", 1, 1});
-    nq::FeatureEngine& eng = pipe.Engine();
-
-    const std::size_t idx = eng.LoadPlugin(NQ_TEST_PLUGIN_PATH, "test");
-    CHECK(idx == 0 && eng.PluginCount() == 1);
-    CHECK(eng.Columns().size() == 5);
-    CHECK(eng.Columns()[0].name == "test.spread" && eng.Columns()[0].kind == NQ_COLUMN_SNAPSHOT);
-    CHECK(eng.Columns()[2].name == "test.buy_vol" && eng.Columns()[2].kind == NQ_COLUMN_CUMULATIVE);
+    nq::PluginSet set;
+    const std::size_t idx = set.LoadPlugin(NQ_TEST_PLUGIN_PATH, "test");
+    CHECK(idx == 0 && set.PluginCount() == 1);
+    CHECK(set.Columns().size() == 5);
+    CHECK(set.Columns()[0].name == "test.spread" && set.Columns()[0].kind == NQ_COLUMN_SNAPSHOT);
+    CHECK(set.Columns()[2].name == "test.buy_vol" && set.Columns()[2].kind == NQ_COLUMN_CUMULATIVE);
 
     bool threw = false;
-    try { eng.LoadPlugin(NQ_TEST_PLUGIN_PATH, "test"); } catch (const std::invalid_argument&) { threw = true; }
+    try { set.LoadPlugin(NQ_TEST_PLUGIN_PATH, "test"); } catch (const std::invalid_argument&) { threw = true; }
     CHECK(threw);
 
-    nq::Sampler& bars = eng.AddSampler(nq::SamplerSpec::Time("1s", kSec));
-    nq::Sampler& filled = eng.AddSampler(nq::SamplerSpec::Time("1s_fill", kSec).FillGaps());
-    nq::Sampler& every3 = eng.AddSampler(nq::SamplerSpec::Events("3ev", 3));
-    nq::Sampler& trades = eng.AddSampler(nq::SamplerSpec::Trades("1tr", 1).Columns({"test.trades", "test.spread"}));
+    set.AddSampler(nq::SamplerSpec::Time("1s", kSec));
+    set.AddSampler(nq::SamplerSpec::Time("1s_fill", kSec).FillGaps());
+    set.AddSampler(nq::SamplerSpec::Events("3ev", 3));
+    set.AddSampler(nq::SamplerSpec::Trades("1tr", 1).Columns({"test.trades", "test.spread"}));
+    CHECK(set.FindSampler("1tr")->columns.size() == 2 && set.FindSampler("1tr")->names[0] == "test.trades");
+
+    threw = false;
+    try { set.AddSampler(nq::SamplerSpec::Time("bad", kSec).Columns({"nope"})); } catch (const std::invalid_argument&) { threw = true; }
+    CHECK(threw);
+    threw = false;
+    try { set.AddSampler(nq::SamplerSpec::Events("zero", 0)); } catch (const std::invalid_argument&) { threw = true; }
+    CHECK(threw);
+    threw = false;
+    try { set.AddSampler(nq::SamplerSpec::Time("1s", kSec)); } catch (const std::invalid_argument&) { threw = true; }
+    CHECK(threw);
+    threw = false;
+    try { set.LoadPlugin(NQ_TEST_PLUGIN_PATH, "late"); } catch (const std::logic_error&) { threw = true; }
+    CHECK(threw);
+
+    nq::Pipeline pipe(set, nq::InstrumentSpec{"TEST", 1, 1});
+    nq::FeatureEngine& eng = pipe.Engine();
+    CHECK(eng.SamplerCount() == 4 && eng.Columns().size() == 5);
+    nq::Sampler& bars = eng.GetSampler(0);
+    nq::Sampler& filled = eng.GetSampler(1);
+    nq::Sampler& every3 = eng.GetSampler(2);
+    nq::Sampler& trades = eng.GetSampler(3);
     CHECK(trades.Ncol() == 2 && trades.Rows().Columns()[0] == "test.trades");
-
-    threw = false;
-    try { eng.AddSampler(nq::SamplerSpec::Time("bad", kSec).Columns({"nope"})); } catch (const std::invalid_argument&) { threw = true; }
-    CHECK(threw);
-    threw = false;
-    try { eng.AddSampler(nq::SamplerSpec::Events("zero", 0)); } catch (const std::invalid_argument&) { threw = true; }
-    CHECK(threw);
-    threw = false;
-    try { eng.LoadPlugin(NQ_TEST_PLUGIN_PATH, "late"); } catch (const std::logic_error&) { threw = true; }
-    CHECK(threw);
 
     pipe.Apply(Add(0.1, 1, side::bid, 100.50, 7));
     pipe.Apply(Add(0.2, 2, side::ask, 100.70, 3));
@@ -133,9 +143,11 @@ static int TestPipeline() {
 }
 
 static int TestQueueDrain() {
-    nq::Pipeline pipe(nq::InstrumentSpec{"TEST", 1, 1});
-    pipe.Engine().LoadPlugin(NQ_TEST_PLUGIN_PATH, "test");
-    nq::Sampler& bars = pipe.Engine().AddSampler(nq::SamplerSpec::Time("1s", kSec));
+    nq::PluginSet set;
+    set.LoadPlugin(NQ_TEST_PLUGIN_PATH, "test");
+    set.AddSampler(nq::SamplerSpec::Time("1s", kSec));
+    nq::Pipeline pipe(set, nq::InstrumentSpec{"TEST", 1, 1});
+    nq::Sampler& bars = pipe.Engine().GetSampler(0);
 
     nq::Orderbook::Queue q(64);
     CHECK(q.try_push(Add(0.1, 1, side::bid, 10, 1)));

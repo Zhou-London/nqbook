@@ -1,13 +1,17 @@
+#include <atomic>
+#include <csignal>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include <CLI/CLI.hpp>
+#include <nq/params.hpp>
 
 #include <Config.h>
-#include <Pipeline.h>
+#include <Feature/PluginSet.h>
+#include <Report.h>
+#include <Runner.h>
 
 namespace {
 
@@ -18,131 +22,47 @@ enum ExitCode : int {
     kPluginInit = 4,
     kSamplerInvalid = 5,
     kParamsInvalid = 6,
+    kAdapterFailed = 7,
+    kOutputFailed = 8,
+    kInterrupted = 130,
 };
 
-struct CheckOptions {
-    std::string symbol;
-    std::int64_t tick_size = 1;
-    std::int64_t lot_size = 1;
+std::atomic<bool> g_stop{false};
+
+void OnSignal(int) { g_stop.store(true, std::memory_order_relaxed); }
+
+struct PluginOptions {
     std::vector<std::string> plugins;
     std::string plugin_dir;
     std::vector<std::string> samplers;
     bool fill_gaps = false;
-    std::string format = "text";
 };
 
-const char* RequiresName(std::uint8_t r) {
-    switch (r) {
-        case NQ_REQUIRES_L1: return "L1";
-        case NQ_REQUIRES_MBP: return "MBP";
-        case NQ_REQUIRES_MBO: return "MBO";
-    }
-    return "?";
+struct AdapterOptions {
+    std::string adapter;
+    std::vector<std::string> params;
+    std::size_t queue_capacity = 1 << 16;
+};
+
+void AddPluginOptions(CLI::App* cmd, PluginOptions& opt) {
+    cmd->add_option("--plugin", opt.plugins, "Plugin .so to load, in order; repeatable")->check(CLI::ExistingFile);
+    cmd->add_option("--plugin-dir", opt.plugin_dir, "Directory whose *.so are loaded in filename order")->check(CLI::ExistingDirectory);
+    cmd->add_option("--sampler", opt.samplers, "NAME=TRIGGER:EVERY, e.g. 1s=time:1s, fast=events:100, t=trades:1; repeatable");
+    cmd->add_flag("--fill-gaps", opt.fill_gaps, "Time samplers emit a row for every empty bar");
 }
 
-const char* KindName(std::uint8_t k) { return k == NQ_COLUMN_CUMULATIVE ? "cumulative" : "snapshot"; }
-
-const char* TriggerName(nq::Trigger t) {
-    switch (t) {
-        case nq::Trigger::Time: return "time";
-        case nq::Trigger::Events: return "events";
-        case nq::Trigger::Trades: return "trades";
-    }
-    return "?";
+void AddAdapterOptions(CLI::App* cmd, AdapterOptions& opt) {
+    cmd->add_option("--adapter", opt.adapter, "Adapter .so that produces the mbo stream")->required()->check(CLI::ExistingFile);
+    cmd->add_option("--adapter-param", opt.params, "KEY=VALUE for the adapter, after its .params file; repeatable");
+    cmd->add_option("--queue-capacity", opt.queue_capacity, "Adapter-to-book queue capacity, rounded up to a power of two")->check(CLI::PositiveNumber);
 }
 
-std::string JsonString(std::string_view s) {
-    std::string out = "\"";
-    for (const char c : s) {
-        switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\t': out += "\\t"; break;
-            default: out += c;
-        }
-    }
-    out += '"';
-    return out;
+int Fail(int code, const std::exception& e) {
+    std::fprintf(stderr, "nqbook: %s\n", e.what());
+    return code;
 }
 
-void PrintText(const nq::FeatureEngine& eng, const std::vector<nq::PluginFile>& files) {
-    const auto& inst = eng.Instrument();
-    std::printf("instrument  %s  tick_size=%lld  lot_size=%lld  price_scale=%lld  qty_scale=%lld\n",
-                inst.symbol.c_str(), static_cast<long long>(inst.tick_size),
-                static_cast<long long>(inst.lot_size), static_cast<long long>(nlib::price_scale),
-                static_cast<long long>(nlib::qty_scale));
-
-    std::printf("plugins (%zu)\n", eng.PluginCount());
-    for (std::size_t i = 0; i < eng.PluginCount(); ++i) {
-        const auto& p = eng.Plugin(i);
-        std::printf("  %-16s %s  sdk=%s requires=%s cols=%u", files[i].name.c_str(), p.Path().c_str(),
-                    p.Schema().sdk_version, RequiresName(p.Schema().requirement), p.Schema().ncol);
-        for (const auto& [k, v] : files[i].params) std::printf("  %s=%s", k.c_str(), v.c_str());
-        std::printf("\n");
-    }
-
-    std::printf("columns (%zu)\n", eng.Columns().size());
-    for (const auto& c : eng.Columns()) {
-        std::printf("  %-32s %-10s %-10s %s\n", c.name.c_str(), c.unit.c_str(), KindName(c.kind), c.doc.c_str());
-    }
-
-    std::printf("samplers (%zu)\n", eng.SamplerCount());
-    for (std::size_t i = 0; i < eng.SamplerCount(); ++i) {
-        const auto& s = eng.GetSampler(i).Spec();
-        std::printf("  %-16s %s every=%lld%s fill_gaps=%s cols=%zu\n", s.name.c_str(), TriggerName(s.trigger),
-                    static_cast<long long>(s.every), s.trigger == nq::Trigger::Time ? "ns" : "",
-                    s.fill_gaps ? "yes" : "no", eng.GetSampler(i).Ncol());
-    }
-}
-
-void PrintJson(const nq::FeatureEngine& eng, const std::vector<nq::PluginFile>& files) {
-    const auto& inst = eng.Instrument();
-    std::printf("{\n  \"instrument\": {\"symbol\": %s, \"tick_size\": %lld, \"lot_size\": %lld, "
-                "\"price_scale\": %lld, \"qty_scale\": %lld},\n",
-                JsonString(inst.symbol).c_str(), static_cast<long long>(inst.tick_size),
-                static_cast<long long>(inst.lot_size), static_cast<long long>(nlib::price_scale),
-                static_cast<long long>(nlib::qty_scale));
-
-    std::printf("  \"plugins\": [");
-    for (std::size_t i = 0; i < eng.PluginCount(); ++i) {
-        const auto& p = eng.Plugin(i);
-        std::printf("%s\n    {\"name\": %s, \"path\": %s, \"sdk_version\": %s, \"requires\": \"%s\", \"ncol\": %u, \"params\": {",
-                    i ? "," : "", JsonString(files[i].name).c_str(), JsonString(p.Path()).c_str(),
-                    JsonString(p.Schema().sdk_version).c_str(), RequiresName(p.Schema().requirement),
-                    p.Schema().ncol);
-        for (std::size_t j = 0; j < files[i].params.size(); ++j) {
-            std::printf("%s%s: %s", j ? ", " : "", JsonString(files[i].params[j].first).c_str(),
-                        JsonString(files[i].params[j].second).c_str());
-        }
-        std::printf("}}");
-    }
-    std::printf("\n  ],\n");
-
-    std::printf("  \"columns\": [");
-    for (std::size_t i = 0; i < eng.Columns().size(); ++i) {
-        const auto& c = eng.Columns()[i];
-        std::printf("%s\n    {\"name\": %s, \"unit\": %s, \"kind\": \"%s\", \"doc\": %s, \"plugin\": %s}",
-                    i ? "," : "", JsonString(c.name).c_str(), JsonString(c.unit).c_str(), KindName(c.kind),
-                    JsonString(c.doc).c_str(), JsonString(files[c.plugin_index].name).c_str());
-    }
-    std::printf("\n  ],\n");
-
-    std::printf("  \"samplers\": [");
-    for (std::size_t i = 0; i < eng.SamplerCount(); ++i) {
-        const auto& sampler = eng.GetSampler(i);
-        const auto& s = sampler.Spec();
-        std::printf("%s\n    {\"name\": %s, \"trigger\": \"%s\", \"every\": %lld, \"fill_gaps\": %s, \"columns\": [",
-                    i ? "," : "", JsonString(s.name).c_str(), TriggerName(s.trigger),
-                    static_cast<long long>(s.every), s.fill_gaps ? "true" : "false");
-        const auto& cols = sampler.Rows().Columns();
-        for (std::size_t j = 0; j < cols.size(); ++j) std::printf("%s%s", j ? ", " : "", JsonString(cols[j]).c_str());
-        std::printf("]}");
-    }
-    std::printf("\n  ]\n}\n");
-}
-
-int Check(const CheckOptions& opt) {
+int LoadPluginSet(const PluginOptions& opt, nq::PluginSet& set) {
     std::vector<nq::SamplerSpec> specs;
     try {
         for (const auto& s : opt.samplers) {
@@ -151,8 +71,7 @@ int Check(const CheckOptions& opt) {
             specs.push_back(std::move(spec));
         }
     } catch (const std::invalid_argument& e) {
-        std::fprintf(stderr, "nqbook: %s\n", e.what());
-        return kSamplerInvalid;
+        return Fail(kSamplerInvalid, e);
     }
 
     std::vector<nq::PluginFile> files;
@@ -162,37 +81,102 @@ int Check(const CheckOptions& opt) {
             for (auto& f : nq::ScanPluginDir(opt.plugin_dir)) files.push_back(std::move(f));
         }
     } catch (const std::invalid_argument& e) {
-        std::fprintf(stderr, "nqbook: %s\n", e.what());
-        return kParamsInvalid;
+        return Fail(kParamsInvalid, e);
     }
 
-    nq::Pipeline pipe(nq::InstrumentSpec{opt.symbol, opt.tick_size, opt.lot_size});
-    nq::FeatureEngine& eng = pipe.Engine();
     try {
-        for (const auto& f : files) eng.LoadPlugin(f.path.string(), f.name, f.params);
+        for (auto& f : files) set.LoadPlugin(f.path.string(), f.name, std::move(f.params));
     } catch (const nq::host::AbiMismatchError& e) {
-        std::fprintf(stderr, "nqbook: %s\n", e.what());
-        return kAbiMismatch;
+        return Fail(kAbiMismatch, e);
     } catch (const nq::host::PluginInitError& e) {
-        std::fprintf(stderr, "nqbook: %s\n", e.what());
-        return kPluginInit;
+        return Fail(kPluginInit, e);
     } catch (const nq::host::PluginLoadError& e) {
-        std::fprintf(stderr, "nqbook: %s\n", e.what());
-        return kPluginLoad;
+        return Fail(kPluginLoad, e);
     } catch (const std::invalid_argument& e) {
-        std::fprintf(stderr, "nqbook: %s\n", e.what());
-        return kPluginLoad;
+        return Fail(kPluginLoad, e);
     }
 
     try {
-        for (auto& spec : specs) eng.AddSampler(std::move(spec));
+        for (auto& spec : specs) set.AddSampler(std::move(spec));
     } catch (const std::invalid_argument& e) {
-        std::fprintf(stderr, "nqbook: %s\n", e.what());
-        return kSamplerInvalid;
+        return Fail(kSamplerInvalid, e);
+    }
+    return kOk;
+}
+
+int ParseAdapterParams(const AdapterOptions& opt, nq::ParamsBuilder& pb) {
+    try {
+        nq::PluginFile f = nq::DescribePluginFile(opt.adapter);
+        for (const auto& [k, v] : f.params) pb.Set(k, v);
+        for (const auto& kv : opt.params) {
+            const auto eq = kv.find('=');
+            if (eq == std::string::npos || eq == 0) throw std::invalid_argument("--adapter-param expects KEY=VALUE: '" + kv + "'");
+            pb.Set(kv.substr(0, eq), kv.substr(eq + 1));
+        }
+    } catch (const std::invalid_argument& e) {
+        return Fail(kParamsInvalid, e);
+    }
+    pb.PriceScale(nlib::price_scale).QtyScale(nlib::qty_scale);
+    return kOk;
+}
+
+int Check(const PluginOptions& popt, const std::string& format) {
+    nq::PluginSet set;
+    if (int rc = LoadPluginSet(popt, set)) return rc;
+
+    try {
+        nq::Pipeline probe(set, nq::InstrumentSpec{"probe", 1, 1}, 16);
+    } catch (const nq::host::PluginInitError& e) {
+        return Fail(kPluginInit, e);
     }
 
-    if (opt.format == "json") PrintJson(eng, files);
-    else PrintText(eng, files);
+    if (format == "json") nq::PrintPluginSetJson(stdout, set);
+    else nq::PrintPluginSetText(stdout, set);
+    return kOk;
+}
+
+int Run(const PluginOptions& popt, const AdapterOptions& aopt, const std::string& out_dir, bool feed_only) {
+    nq::PluginSet set;
+    if (!feed_only) {
+        if (int rc = LoadPluginSet(popt, set)) return rc;
+    }
+
+    nq::ParamsBuilder pb;
+    if (int rc = ParseAdapterParams(aopt, pb)) return rc;
+
+    std::signal(SIGINT, OnSignal);
+    std::signal(SIGTERM, OnSignal);
+
+    nq::RunResult result;
+    try {
+        nq::host::AdapterPlugin adapter(aopt.adapter);
+        nq::Runner runner(set, adapter, *pb.Build(), aopt.queue_capacity);
+        result = runner.Run(g_stop);
+        nq::PrintFeedReport(stderr, runner.GetMarket(), result);
+        if (!feed_only && !out_dir.empty()) {
+            try {
+                for (const auto& p : nq::WriteSamplerCsv(runner.GetMarket(), out_dir)) {
+                    std::fprintf(stderr, "wrote %s\n", p.string().c_str());
+                }
+            } catch (const std::exception& e) {
+                return Fail(kOutputFailed, e);
+            }
+        }
+    } catch (const nq::host::AbiMismatchError& e) {
+        return Fail(kAbiMismatch, e);
+    } catch (const nq::host::PluginInitError& e) {
+        return Fail(kPluginInit, e);
+    } catch (const nq::host::PluginLoadError& e) {
+        return Fail(kPluginLoad, e);
+    } catch (const nq::host::PluginError& e) {
+        return Fail(kAdapterFailed, e);
+    }
+
+    if (result.interrupted) return kInterrupted;
+    if (result.adapter_status != 0) {
+        std::fprintf(stderr, "nqbook: adapter ended with status %d\n", result.adapter_status);
+        return kAdapterFailed;
+    }
     return kOk;
 }
 
@@ -202,16 +186,23 @@ int main(int argc, char** argv) {
     CLI::App app{"nqbook: MBO order book with a plugin feature engine"};
     app.require_subcommand(1);
 
-    CheckOptions opt;
+    PluginOptions check_plugins;
+    std::string check_format = "text";
     CLI::App* check = app.add_subcommand("check", "Load plugins and samplers, print what would run, exit");
-    check->add_option("--symbol", opt.symbol, "Instrument symbol")->required();
-    check->add_option("--tick-size", opt.tick_size, "Price tick in 1/price_scale units")->check(CLI::PositiveNumber);
-    check->add_option("--lot-size", opt.lot_size, "Quantity lot in 1/qty_scale units")->check(CLI::PositiveNumber);
-    check->add_option("--plugin", opt.plugins, "Plugin .so to load, in order; repeatable")->check(CLI::ExistingFile);
-    check->add_option("--plugin-dir", opt.plugin_dir, "Directory whose *.so are loaded in filename order")->check(CLI::ExistingDirectory);
-    check->add_option("--sampler", opt.samplers, "NAME=TRIGGER:EVERY, e.g. 1s=time:1s, fast=events:100, t=trades:1; repeatable");
-    check->add_flag("--fill-gaps", opt.fill_gaps, "Time samplers emit a row for every empty bar");
-    check->add_option("--format", opt.format, "Output format")->check(CLI::IsMember({"text", "json"}));
+    AddPluginOptions(check, check_plugins);
+    check->add_option("--format", check_format, "Output format")->check(CLI::IsMember({"text", "json"}));
+
+    PluginOptions run_plugins;
+    AdapterOptions run_adapter;
+    std::string out_dir;
+    CLI::App* run = app.add_subcommand("run", "Consume an adapter's mbo stream through the book and plugins");
+    AddAdapterOptions(run, run_adapter);
+    AddPluginOptions(run, run_plugins);
+    run->add_option("--out-dir", out_dir, "Directory that receives one CSV per sampler when the run ends");
+
+    AdapterOptions feed_adapter;
+    CLI::App* feed = app.add_subcommand("check-feed", "Consume an adapter's mbo stream through bare books and report feed quality");
+    AddAdapterOptions(feed, feed_adapter);
 
     std::string help_topic;
     CLI::App* help = app.add_subcommand("help", "Print help for nqbook or for a subcommand");
@@ -232,6 +223,8 @@ int main(int argc, char** argv) {
             return static_cast<int>(CLI::ExitCodes::OptionNotFound);
         }
     }
-    if (check->parsed()) return Check(opt);
+    if (check->parsed()) return Check(check_plugins, check_format);
+    if (run->parsed()) return Run(run_plugins, run_adapter, out_dir, false);
+    if (feed->parsed()) return Run(PluginOptions{}, feed_adapter, "", true);
     return kOk;
 }
