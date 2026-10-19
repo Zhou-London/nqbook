@@ -2,6 +2,8 @@
 
 #include <new>
 
+namespace nq {
+
 Orderbook::Orderbook(std::size_t expected_orders) : pool_(expected_orders) {
     orders_.reserve(expected_orders);
 }
@@ -259,3 +261,5 @@ nlib::qty_t Orderbook::FillLevel(nlib::side s, nlib::price_t p, nlib::qty_t qty)
     }
     return qty - remaining;
 }
+
+}  // namespace nq

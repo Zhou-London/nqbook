@@ -13,6 +13,8 @@
 #include <nlib/memory_pool.h>
 #include <nlib/single_queue.h>
 
+namespace nq {
+
 class Orderbook {
 public:
     using Queue = nlib::single_queue<nlib::mbo>;
@@ -98,3 +100,5 @@ private:
     Stats stats_;
     nlib::ns_t last_ts_ = 0;
 };
+
+}  // namespace nq
