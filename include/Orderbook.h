@@ -41,13 +41,13 @@ public:
     Orderbook& operator=(const Orderbook&) = delete;
 
     // Feed Handlers
-    void Apply(const nlib::mbo& m);
+    nlib::qty_t Apply(const nlib::mbo& m);
     std::size_t Drain(Queue& q, std::size_t max = std::numeric_limits<std::size_t>::max());
 
     void OnOrder(const nlib::mbo& m);
     void OnCancel(const nlib::mbo& m);
     void OnModify(const nlib::mbo& m);
-    void OnTrade(const nlib::mbo& m);
+    nlib::qty_t OnTrade(const nlib::mbo& m);
     void OnClear(const nlib::mbo& m);
 
     // Queries
@@ -63,8 +63,6 @@ public:
     std::size_t AskLevelCount() const noexcept { return asks_.size(); }
 
     nlib::ns_t LastTs() const noexcept { return last_ts_; }
-    std::uint64_t TradeCount() const noexcept { return trade_count_; }
-    const nlib::trade& LastTrade() const noexcept { return last_trade_; }
     const Stats& GetStats() const noexcept { return stats_; }
 
 private:
@@ -98,7 +96,5 @@ private:
     nlib::map<nlib::order_id, nlib::order*> orders_;
     OrderPool pool_;
     Stats stats_;
-    nlib::trade last_trade_{};
-    std::uint64_t trade_count_ = 0;
     nlib::ns_t last_ts_ = 0;
 };

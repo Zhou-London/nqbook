@@ -7,14 +7,15 @@ Orderbook::Orderbook(std::size_t expected_orders) : pool_(expected_orders) {
 }
 
 // Feed Handlers
-void Orderbook::Apply(const nlib::mbo& m) {
+nlib::qty_t Orderbook::Apply(const nlib::mbo& m) {
     switch (m.action) {
-        case nlib::action::add: OnOrder(m); break;
-        case nlib::action::cancel: OnCancel(m); break;
-        case nlib::action::modify: OnModify(m); break;
-        case nlib::action::trade: OnTrade(m); break;
-        case nlib::action::clear: OnClear(m); break;
+        case nlib::action::add: OnOrder(m); return 0;
+        case nlib::action::cancel: OnCancel(m); return 0;
+        case nlib::action::modify: OnModify(m); return 0;
+        case nlib::action::trade: return OnTrade(m);
+        case nlib::action::clear: OnClear(m); return 0;
     }
+    return 0;
 }
 
 std::size_t Orderbook::Drain(Queue& q, std::size_t max) {
@@ -92,10 +93,10 @@ void Orderbook::OnModify(const nlib::mbo& m) {
     o->qty = m.qty;
 }
 
-void Orderbook::OnTrade(const nlib::mbo& m) {
+nlib::qty_t Orderbook::OnTrade(const nlib::mbo& m) {
     ++stats_.trades;
     last_ts_ = m.ts;
-    if (m.qty <= 0) { ++stats_.bad_qty; return; }
+    if (m.qty <= 0) { ++stats_.bad_qty; return 0; }
 
     nlib::qty_t filled = 0;
     if (m.id != 0) {
@@ -110,9 +111,7 @@ void Orderbook::OnTrade(const nlib::mbo& m) {
         filled = FillLevel(m.side, m.price, m.qty);
         if (filled < m.qty) ++stats_.unmatched_trade;
     }
-
-    last_trade_ = nlib::trade{m.ts, m.price, m.qty, m.id, m.side};
-    ++trade_count_;
+    return filled;
 }
 
 void Orderbook::OnClear(const nlib::mbo& m) {
