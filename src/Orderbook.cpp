@@ -20,7 +20,7 @@ nlib::qty_t Orderbook::Apply(const nlib::mbo& m) {
     return 0;
 }
 
-std::size_t Orderbook::Drain(Queue& q, std::size_t max) {
+std::size_t Orderbook::Consume(Queue& q, std::size_t max) {
     std::size_t n = 0;
     while (n < max) {
         auto m = q.try_pop();
@@ -34,8 +34,8 @@ std::size_t Orderbook::Drain(Queue& q, std::size_t max) {
 void Orderbook::OnOrder(const nlib::mbo& m) {
     ++stats_.adds;
     last_ts_ = m.ts;
-    if (m.qty <= 0) { ++stats_.bad_qty; return; }
-    if (orders_.contains(m.id)) { ++stats_.duplicate_add; return; }
+    if (m.qty <= 0) { ++stats_.qty_invalid; return; }
+    if (orders_.contains(m.id)) { ++stats_.add_duplicate; return; }
 
     nlib::order* o = pool_.Alloc();
     o->id = m.id;
@@ -47,18 +47,18 @@ void Orderbook::OnOrder(const nlib::mbo& m) {
     o->next = nullptr;
     o->level = nullptr;
 
-    Link(o, FindOrCreateLevel(m.side, m.price));
+    LinkOrder(o, FindOrCreateLevel(m.side, m.price));
     orders_.try_emplace(nlib::order_id{m.id}, o);
 }
 
 void Orderbook::OnCancel(const nlib::mbo& m) {
     ++stats_.cancels;
     last_ts_ = m.ts;
-    nlib::order* o = Lookup(m.id);
-    if (!o) { ++stats_.unknown_cancel; return; }
+    nlib::order* o = MutableOrder(m.id);
+    if (!o) { ++stats_.cancel_unknown; return; }
 
     if (m.qty <= 0 || m.qty >= o->qty) {
-        Remove(o);
+        RemoveOrder(o);
         return;
     }
     o->qty -= m.qty;
@@ -68,27 +68,27 @@ void Orderbook::OnCancel(const nlib::mbo& m) {
 void Orderbook::OnModify(const nlib::mbo& m) {
     ++stats_.modifies;
     last_ts_ = m.ts;
-    nlib::order* o = Lookup(m.id);
-    if (!o) { ++stats_.unknown_modify; return; }
+    nlib::order* o = MutableOrder(m.id);
+    if (!o) { ++stats_.modify_unknown; return; }
 
     if (m.qty <= 0) {
-        Remove(o);
+        RemoveOrder(o);
         return;
     }
     if (m.price != o->price) {
-        Unlink(o);
+        UnlinkOrder(o);
         o->price = m.price;
         o->qty = m.qty;
         o->ts = m.ts;
-        Link(o, FindOrCreateLevel(o->side, m.price));
+        LinkOrder(o, FindOrCreateLevel(o->side, m.price));
         return;
     }
     if (m.qty > o->qty && (o->prev || o->next)) {
         nlib::level* lv = o->level;
-        Unlink(o);
+        UnlinkOrder(o);
         o->qty = m.qty;
         o->ts = m.ts;
-        Link(o, lv);
+        LinkOrder(o, lv);
         return;
     }
     o->level->qty -= o->qty - m.qty;
@@ -98,20 +98,20 @@ void Orderbook::OnModify(const nlib::mbo& m) {
 nlib::qty_t Orderbook::OnTrade(const nlib::mbo& m) {
     ++stats_.trades;
     last_ts_ = m.ts;
-    if (m.qty <= 0) { ++stats_.bad_qty; return 0; }
+    if (m.qty <= 0) { ++stats_.qty_invalid; return 0; }
 
     nlib::qty_t filled = 0;
     if (m.id != 0) {
-        nlib::order* o = Lookup(m.id);
+        nlib::order* o = MutableOrder(m.id);
         if (o) {
             filled = Fill(o, m.qty);
-            if (filled < m.qty) ++stats_.over_trade;
+            if (filled < m.qty) ++stats_.trade_over_order;
         } else {
-            ++stats_.unknown_trade;
+            ++stats_.trade_unknown;
         }
     } else {
         filled = FillLevel(m.side, m.price, m.qty);
-        if (filled < m.qty) ++stats_.unmatched_trade;
+        if (filled < m.qty) ++stats_.trade_over_level;
     }
     return filled;
 }
@@ -134,7 +134,7 @@ const nlib::level* Orderbook::BestAsk() const noexcept {
     return asks_.empty() ? nullptr : &asks_.begin()->second;
 }
 
-const nlib::level* Orderbook::Level(nlib::side s, nlib::price_t p) const noexcept {
+const nlib::level* Orderbook::FindLevel(nlib::side s, nlib::price_t p) const noexcept {
     if (s == nlib::side::bid) {
         auto it = bids_.find(p);
         return it == bids_.end() ? nullptr : &it->second;
@@ -143,7 +143,7 @@ const nlib::level* Orderbook::Level(nlib::side s, nlib::price_t p) const noexcep
     return it == asks_.end() ? nullptr : &it->second;
 }
 
-const nlib::order* Orderbook::Find(nlib::order_id id) const noexcept {
+const nlib::order* Orderbook::FindOrder(nlib::order_id id) const noexcept {
     auto it = orders_.find(id);
     return it == orders_.end() ? nullptr : it->second;
 }
@@ -178,7 +178,7 @@ void Orderbook::OrderPool::Reset() noexcept {
 }
 
 // Internals
-nlib::order* Orderbook::Lookup(nlib::order_id id) noexcept {
+nlib::order* Orderbook::MutableOrder(nlib::order_id id) noexcept {
     auto it = orders_.find(id);
     return it == orders_.end() ? nullptr : it->second;
 }
@@ -192,7 +192,7 @@ nlib::level* Orderbook::FindOrCreateLevel(nlib::side s, nlib::price_t p) {
     return s == nlib::side::bid ? emplace(bids_) : emplace(asks_);
 }
 
-nlib::level* Orderbook::FindLevel(nlib::side s, nlib::price_t p) noexcept {
+nlib::level* Orderbook::MutableLevel(nlib::side s, nlib::price_t p) noexcept {
     if (s == nlib::side::bid) {
         auto it = bids_.find(p);
         return it == bids_.end() ? nullptr : &it->second;
@@ -201,12 +201,12 @@ nlib::level* Orderbook::FindLevel(nlib::side s, nlib::price_t p) noexcept {
     return it == asks_.end() ? nullptr : &it->second;
 }
 
-void Orderbook::EraseLevel(nlib::level* lv, nlib::side s) {
+void Orderbook::RemoveLevel(nlib::level* lv, nlib::side s) {
     if (s == nlib::side::bid) bids_.erase(lv->price);
     else asks_.erase(lv->price);
 }
 
-void Orderbook::Link(nlib::order* o, nlib::level* lv) noexcept {
+void Orderbook::LinkOrder(nlib::order* o, nlib::level* lv) noexcept {
     o->level = lv;
     o->prev = lv->tail;
     o->next = nullptr;
@@ -217,7 +217,7 @@ void Orderbook::Link(nlib::order* o, nlib::level* lv) noexcept {
     ++lv->count;
 }
 
-void Orderbook::Unlink(nlib::order* o) {
+void Orderbook::UnlinkOrder(nlib::order* o) {
     nlib::level* lv = o->level;
     if (o->prev) o->prev->next = o->next;
     else lv->head = o->next;
@@ -228,11 +228,11 @@ void Orderbook::Unlink(nlib::order* o) {
     o->prev = nullptr;
     o->next = nullptr;
     o->level = nullptr;
-    if (lv->count == 0) EraseLevel(lv, o->side);
+    if (lv->count == 0) RemoveLevel(lv, o->side);
 }
 
-void Orderbook::Remove(nlib::order* o) {
-    Unlink(o);
+void Orderbook::RemoveOrder(nlib::order* o) {
+    UnlinkOrder(o);
     orders_.erase(o->id);
     pool_.Free(o);
 }
@@ -240,7 +240,7 @@ void Orderbook::Remove(nlib::order* o) {
 nlib::qty_t Orderbook::Fill(nlib::order* o, nlib::qty_t qty) {
     const nlib::qty_t filled = qty < o->qty ? qty : o->qty;
     if (filled == o->qty) {
-        Remove(o);
+        RemoveOrder(o);
     } else {
         o->qty -= filled;
         o->level->qty -= filled;
@@ -249,7 +249,7 @@ nlib::qty_t Orderbook::Fill(nlib::order* o, nlib::qty_t qty) {
 }
 
 nlib::qty_t Orderbook::FillLevel(nlib::side s, nlib::price_t p, nlib::qty_t qty) {
-    nlib::level* lv = FindLevel(s, p);
+    nlib::level* lv = MutableLevel(s, p);
     if (!lv) return 0;
 
     nlib::qty_t remaining = qty;

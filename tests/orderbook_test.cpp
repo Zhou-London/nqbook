@@ -32,43 +32,43 @@ int main() {
     CHECK(ob.BestBid()->head->id == 1 && ob.BestBid()->tail->id == 2);
 
     ob.Apply(Add(1, side::bid, 100, 10));
-    CHECK(ob.GetStats().duplicate_add == 1 && ob.OrderCount() == 5);
+    CHECK(ob.GetStats().add_duplicate == 1 && ob.OrderCount() == 5);
 
     ob.Apply(Cancel(1, 4));
-    CHECK(ob.Find(1)->qty == 6 && ob.BestBid()->qty == 11);
+    CHECK(ob.FindOrder(1)->qty == 6 && ob.BestBid()->qty == 11);
     ob.Apply(Cancel(1));
-    CHECK(ob.Find(1) == nullptr && ob.BestBid()->qty == 5 && ob.BestBid()->head->id == 2);
+    CHECK(ob.FindOrder(1) == nullptr && ob.BestBid()->qty == 5 && ob.BestBid()->head->id == 2);
     ob.Apply(Cancel(1));
-    CHECK(ob.GetStats().unknown_cancel == 1);
+    CHECK(ob.GetStats().cancel_unknown == 1);
 
     ob.Apply(Modify(2, 100, 3));
-    CHECK(ob.Find(2)->qty == 3 && ob.BestBid()->qty == 3);
+    CHECK(ob.FindOrder(2)->qty == 3 && ob.BestBid()->qty == 3);
     ob.Apply(Add(6, side::bid, 100, 1));
     CHECK(ob.BestBid()->head->id == 2);
     ob.Apply(Modify(2, 100, 9));
     CHECK(ob.BestBid()->head->id == 6 && ob.BestBid()->tail->id == 2 && ob.BestBid()->qty == 10);
     ob.Apply(Modify(2, 98, 9));
     CHECK(ob.BestBid()->price == 100 && ob.BestBid()->qty == 1);
-    CHECK(ob.Level(side::bid, 98)->qty == 9 && ob.BidLevelCount() == 3);
+    CHECK(ob.FindLevel(side::bid, 98)->qty == 9 && ob.BidLevelCount() == 3);
     ob.Apply(Modify(6, 100, 0));
     CHECK(ob.BestBid()->price == 99 && ob.BidLevelCount() == 2);
     ob.Apply(Modify(3, 99, 20));
-    CHECK(ob.Find(3)->qty == 20 && ob.BestBid()->qty == 20 && ob.BestBid()->count == 1);
+    CHECK(ob.FindOrder(3)->qty == 20 && ob.BestBid()->qty == 20 && ob.BestBid()->count == 1);
 
     CHECK(ob.Apply(Trade(4, side::ask, 101, 2)) == 2);
-    CHECK(ob.Find(4)->qty == 1 && ob.BestAsk()->qty == 1);
+    CHECK(ob.FindOrder(4)->qty == 1 && ob.BestAsk()->qty == 1);
     CHECK(ob.Apply(Trade(4, side::ask, 101, 5)) == 1);
-    CHECK(ob.Find(4) == nullptr && ob.BestAsk()->price == 102 && ob.GetStats().over_trade == 1);
-    CHECK(ob.Apply(Trade(99, side::ask, 102, 1)) == 0 && ob.GetStats().unknown_trade == 1);
+    CHECK(ob.FindOrder(4) == nullptr && ob.BestAsk()->price == 102 && ob.GetStats().trade_over_order == 1);
+    CHECK(ob.Apply(Trade(99, side::ask, 102, 1)) == 0 && ob.GetStats().trade_unknown == 1);
 
     ob.Apply(Add(7, side::bid, 99, 2));
     CHECK(ob.Apply(Trade(0, side::bid, 99, 21)) == 21);
-    CHECK(ob.Find(3) == nullptr && ob.Find(7)->qty == 1 && ob.BestBid()->price == 99 && ob.BestBid()->qty == 1);
+    CHECK(ob.FindOrder(3) == nullptr && ob.FindOrder(7)->qty == 1 && ob.BestBid()->price == 99 && ob.BestBid()->qty == 1);
     CHECK(ob.Apply(Trade(0, side::bid, 99, 5)) == 1);
-    CHECK(ob.Level(side::bid, 99) == nullptr && ob.BestBid()->price == 98);
-    CHECK(ob.GetStats().unmatched_trade == 1);
+    CHECK(ob.FindLevel(side::bid, 99) == nullptr && ob.BestBid()->price == 98);
+    CHECK(ob.GetStats().trade_over_level == 1);
     CHECK(ob.Apply(Trade(0, side::bid, 50, 5)) == 0);
-    CHECK(ob.GetStats().unmatched_trade == 2);
+    CHECK(ob.GetStats().trade_over_level == 2);
 
     ob.Apply(mbo{9, 0, 0, 0, side::bid, action::clear});
     CHECK(ob.OrderCount() == 0 && ob.BestBid() == nullptr && ob.BestAsk() == nullptr);
@@ -87,7 +87,7 @@ int main() {
             while (!q.try_push(Add(i, i % 2 ? side::bid : side::ask, 1000 + (i % 7), 1))) {}
     });
     std::size_t drained = 0;
-    while (drained < 10000) drained += ob2.Drain(q);
+    while (drained < 10000) drained += ob2.Consume(q);
     producer.join();
     CHECK(ob2.OrderCount() == 10000 && ob2.LastTs() == 1);
 

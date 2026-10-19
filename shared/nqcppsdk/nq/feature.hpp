@@ -7,7 +7,6 @@
 #include <span>
 #include <tuple>
 #include <type_traits>
-#include <utility>
 
 #include <nq/abi.h>
 #include <nq/book_view.hpp>

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(orderbook
     VERSION 2.0.0
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 set(CMAKE_CXX_STANDARD 23)
@@ -17,21 +17,30 @@ endif()
 add_subdirectory(shared/nlib)
 add_subdirectory(shared/nqcppsdk)
 
-add_library(orderbook_core STATIC
+include(FetchContent)
+FetchContent_Declare(cli11
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+    GIT_TAG v2.5.0
+    GIT_SHALLOW ON
+)
+FetchContent_MakeAvailable(cli11)
+
+add_library(nqbook_core STATIC
     src/Orderbook.cpp
+    src/Config.cpp
     src/Feature/BookAdapter.cpp
     src/Feature/Sampler.cpp
     src/Feature/FeatureEngine.cpp
 )
-target_include_directories(orderbook_core PUBLIC
+target_include_directories(nqbook_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(orderbook_core PUBLIC nlib::nlib nqcppsdk::nqcppsdk ${CMAKE_DL_LIBS})
-target_compile_options(orderbook_core PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(nqbook_core PUBLIC nlib::nlib nqcppsdk::nqcppsdk ${CMAKE_DL_LIBS})
+target_compile_options(nqbook_core PRIVATE -Wall -Wextra -Wpedantic)
 
-add_executable(orderbook src/main.cpp)
-target_link_libraries(orderbook PRIVATE orderbook_core)
-target_compile_options(orderbook PRIVATE -Wall -Wextra -Wpedantic)
+add_executable(nqbook src/main.cpp)
+target_link_libraries(nqbook PRIVATE nqbook_core CLI11::CLI11)
+target_compile_options(nqbook PRIVATE -Wall -Wextra -Wpedantic)
 
 option(ORDERBOOK_BUILD_TESTS "Build the orderbook tests" ${PROJECT_IS_TOP_LEVEL})
 if(ORDERBOOK_BUILD_TESTS)

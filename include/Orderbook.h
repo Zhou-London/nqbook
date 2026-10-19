@@ -27,13 +27,13 @@ public:
         std::uint64_t modifies = 0;
         std::uint64_t trades = 0;
         std::uint64_t clears = 0;
-        std::uint64_t duplicate_add = 0;
-        std::uint64_t unknown_cancel = 0;
-        std::uint64_t unknown_modify = 0;
-        std::uint64_t unknown_trade = 0;
-        std::uint64_t unmatched_trade = 0;
-        std::uint64_t over_trade = 0;
-        std::uint64_t bad_qty = 0;
+        std::uint64_t add_duplicate = 0;
+        std::uint64_t cancel_unknown = 0;
+        std::uint64_t modify_unknown = 0;
+        std::uint64_t trade_unknown = 0;
+        std::uint64_t trade_over_level = 0;
+        std::uint64_t trade_over_order = 0;
+        std::uint64_t qty_invalid = 0;
     };
 
     explicit Orderbook(std::size_t expected_orders = 1 << 16);
@@ -44,7 +44,7 @@ public:
 
     // Feed Handlers
     nlib::qty_t Apply(const nlib::mbo& m);
-    std::size_t Drain(Queue& q, std::size_t max = std::numeric_limits<std::size_t>::max());
+    std::size_t Consume(Queue& q, std::size_t max = std::numeric_limits<std::size_t>::max());
 
     void OnOrder(const nlib::mbo& m);
     void OnCancel(const nlib::mbo& m);
@@ -57,8 +57,8 @@ public:
     const nlib::level* BestAsk() const noexcept;
     const BidLevels& Bids() const noexcept { return bids_; }
     const AskLevels& Asks() const noexcept { return asks_; }
-    const nlib::level* Level(nlib::side s, nlib::price_t p) const noexcept;
-    const nlib::order* Find(nlib::order_id id) const noexcept;
+    const nlib::level* FindLevel(nlib::side s, nlib::price_t p) const noexcept;
+    const nlib::order* FindOrder(nlib::order_id id) const noexcept;
 
     std::size_t OrderCount() const noexcept { return orders_.size(); }
     std::size_t BidLevelCount() const noexcept { return bids_.size(); }
@@ -82,14 +82,14 @@ private:
         nlib::order* free_ = nullptr;
     };
 
-    nlib::order* Lookup(nlib::order_id id) noexcept;
+    nlib::order* MutableOrder(nlib::order_id id) noexcept;
     nlib::level* FindOrCreateLevel(nlib::side s, nlib::price_t p);
-    nlib::level* FindLevel(nlib::side s, nlib::price_t p) noexcept;
-    void EraseLevel(nlib::level* lv, nlib::side s);
+    nlib::level* MutableLevel(nlib::side s, nlib::price_t p) noexcept;
+    void RemoveLevel(nlib::level* lv, nlib::side s);
 
-    static void Link(nlib::order* o, nlib::level* lv) noexcept;
-    void Unlink(nlib::order* o);
-    void Remove(nlib::order* o);
+    static void LinkOrder(nlib::order* o, nlib::level* lv) noexcept;
+    void UnlinkOrder(nlib::order* o);
+    void RemoveOrder(nlib::order* o);
     nlib::qty_t Fill(nlib::order* o, nlib::qty_t qty);
     nlib::qty_t FillLevel(nlib::side s, nlib::price_t p, nlib::qty_t qty);
 

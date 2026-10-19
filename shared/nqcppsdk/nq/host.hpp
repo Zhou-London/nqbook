@@ -6,7 +6,6 @@
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
 
 #include <nq/abi.h>
@@ -16,6 +15,26 @@
 #endif
 
 namespace nq::host {
+
+class PluginError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+class PluginLoadError : public PluginError {
+public:
+    using PluginError::PluginError;
+};
+
+class AbiMismatchError : public PluginError {
+public:
+    using PluginError::PluginError;
+};
+
+class PluginInitError : public PluginError {
+public:
+    using PluginError::PluginError;
+};
 
 struct PluginFns {
     nq_describe_fn describe = nullptr;
@@ -82,7 +101,7 @@ class Plugin {
 public:
     explicit Plugin(const std::string& path) : path_(path) {
         handle_ = ::dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
-        if (!handle_) throw std::runtime_error("dlopen failed: " + path + ": " + DlError());
+        if (!handle_) throw PluginLoadError("dlopen failed: " + path + ": " + DlError());
         try {
             fns_.describe = Resolve<nq_describe_fn>(NQ_SYM_DESCRIBE);
             fns_.init = Resolve<nq_init_fn>(NQ_SYM_INIT);
@@ -91,12 +110,12 @@ public:
             fns_.read = Resolve<nq_read_fn>(NQ_SYM_READ);
             fns_.on_control = Resolve<nq_on_control_fn>(NQ_SYM_ON_CONTROL);
             schema_ = fns_.describe();
-            if (!schema_) throw std::runtime_error("nq_describe returned null: " + path);
+            if (!schema_) throw PluginLoadError("nq_describe returned null: " + path);
             if (schema_->abi_hash != NQ_ABI_HASH) {
-                throw std::runtime_error("abi hash mismatch: " + path + " built against " +
+                throw AbiMismatchError("abi hash mismatch: " + path + " built against " +
                                          Hex(schema_->abi_hash) + ", host is " + Hex(NQ_ABI_HASH));
             }
-            if (schema_->ncol > 0 && !schema_->cols) throw std::runtime_error("schema has no columns: " + path);
+            if (schema_->ncol > 0 && !schema_->cols) throw PluginLoadError("schema has no columns: " + path);
         } catch (...) {
             ::dlclose(handle_);
             handle_ = nullptr;
@@ -138,7 +157,7 @@ public:
 
     PluginInstance Create(const nq_params& params) const {
         void* state = fns_.init(&params);
-        if (!state) throw std::runtime_error("nq_init failed: " + path_);
+        if (!state) throw PluginInitError("nq_init failed: " + path_);
         return PluginInstance(state, fns_, schema_);
     }
 
@@ -146,7 +165,7 @@ private:
     template <class Fn>
     Fn Resolve(const char* name) const {
         void* sym = ::dlsym(handle_, name);
-        if (!sym) throw std::runtime_error(std::string("missing symbol ") + name + ": " + path_);
+        if (!sym) throw PluginLoadError(std::string("missing symbol ") + name + ": " + path_);
         return reinterpret_cast<Fn>(sym);
     }
 

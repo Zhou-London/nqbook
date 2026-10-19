@@ -30,7 +30,7 @@ public:
         return filled;
     }
 
-    std::size_t Drain(Orderbook::Queue& q, std::size_t max = std::numeric_limits<std::size_t>::max()) {
+    std::size_t Consume(Orderbook::Queue& q, std::size_t max = std::numeric_limits<std::size_t>::max()) {
         std::size_t n = 0;
         while (n < max) {
             auto m = q.try_pop();

@@ -141,7 +141,7 @@ static int TestQueueDrain() {
     CHECK(q.try_push(Add(0.1, 1, side::bid, 10, 1)));
     CHECK(q.try_push(Add(0.2, 2, side::ask, 11, 1)));
     CHECK(q.try_push(Trade(1.1, 2, side::ask, 11, 1)));
-    CHECK(pipe.Drain(q) == 3);
+    CHECK(pipe.Consume(q) == 3);
     CHECK(bars.Rows().RowCount() == 1 && RowIs(bars.Rows(), 0, 1.0, 1.0, 10.5, 0, 0, 0));
     CHECK(pipe.Book().BestAsk() == nullptr);
     return 0;
