@@ -79,7 +79,19 @@ public:
         next_ = (ts / interval + 1) * interval;
     }
 
-    bool OnEvent(nlib::action a) noexcept;
+    template <typename Reader>
+    void Close(Reader&& read) {
+        if (spec_.trigger == Trigger::Time) {
+            if (!started_ || !(dirty_ || spec_.fill_gaps)) return;
+            Emit(next_, read());
+            return;
+        }
+        if (count_ == 0) return;
+        count_ = 0;
+        Emit(last_ts_, read());
+    }
+
+    bool OnEvent(std::int64_t ts, nlib::action a) noexcept;
 
     void Emit(std::int64_t ts, std::span<const double> values);
     void ResetBaseline() noexcept;
@@ -92,6 +104,8 @@ private:
     std::vector<double> row_;
     std::int64_t next_ = 0;
     bool started_ = false;
+    bool dirty_ = false;
+    std::int64_t last_ts_ = 0;
     std::int64_t count_ = 0;
 };
 

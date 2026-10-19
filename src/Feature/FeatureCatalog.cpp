@@ -1,11 +1,11 @@
-#include <Feature/PluginSet.h>
+#include <Feature/FeatureCatalog.h>
 
 #include <filesystem>
 #include <stdexcept>
 
 namespace nq {
 
-std::size_t PluginSet::LoadPlugin(const std::string& path, std::string name, KeyValues params) {
+std::size_t FeatureCatalog::LoadPlugin(const std::string& path, std::string name, KeyValues params) {
     if (!samplers_.empty()) throw std::logic_error("LoadPlugin after AddSampler");
     if (name.empty()) name = std::filesystem::path(path).stem().string();
     for (const auto& existing : names_) {
@@ -25,14 +25,14 @@ std::size_t PluginSet::LoadPlugin(const std::string& path, std::string name, Key
     return index;
 }
 
-std::size_t PluginSet::FindColumn(std::string_view name) const {
+std::size_t FeatureCatalog::FindColumn(std::string_view name) const {
     for (std::size_t i = 0; i < columns_.size(); ++i) {
         if (columns_[i].name == name) return i;
     }
     throw std::invalid_argument("unknown column: " + std::string(name));
 }
 
-void PluginSet::AddSampler(SamplerSpec spec) {
+void FeatureCatalog::AddSampler(SamplerSpec spec) {
     if (spec.every <= 0) throw std::invalid_argument("sampler period must be positive: " + spec.name);
     if (FindSampler(spec.name)) throw std::invalid_argument("duplicate sampler name: " + spec.name);
 
@@ -53,7 +53,7 @@ void PluginSet::AddSampler(SamplerSpec spec) {
     samplers_.push_back(std::move(t));
 }
 
-const SamplerTemplate* PluginSet::FindSampler(std::string_view name) const noexcept {
+const SamplerTemplate* FeatureCatalog::FindSampler(std::string_view name) const noexcept {
     for (const auto& s : samplers_) {
         if (s.spec.name == name) return &s;
     }

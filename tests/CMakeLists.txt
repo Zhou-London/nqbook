@@ -14,12 +14,12 @@ target_compile_definitions(engine_test PRIVATE NQ_TEST_PLUGIN_PATH="$<TARGET_FIL
 add_dependencies(engine_test nq_test_plugin)
 add_test(NAME engine_test COMMAND engine_test)
 
-add_executable(market_test market_test.cpp)
-target_link_libraries(market_test PRIVATE nqbook_core)
-target_compile_options(market_test PRIVATE -Wall -Wextra -Wpedantic)
-target_compile_definitions(market_test PRIVATE
+add_executable(pipeline_table_test pipeline_table_test.cpp)
+target_link_libraries(pipeline_table_test PRIVATE nqbook_core)
+target_compile_options(pipeline_table_test PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(pipeline_table_test PRIVATE
     NQ_TEST_PLUGIN_PATH="$<TARGET_FILE:nq_test_plugin>"
     NQ_TEST_ADAPTER_PATH="$<TARGET_FILE:nq_test_adapter>"
 )
-add_dependencies(market_test nq_test_plugin nq_test_adapter)
-add_test(NAME market_test COMMAND market_test)
+add_dependencies(pipeline_table_test nq_test_plugin nq_test_adapter)
+add_test(NAME pipeline_table_test COMMAND pipeline_table_test)

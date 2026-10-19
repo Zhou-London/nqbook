@@ -187,10 +187,12 @@ static int TestRunCli(const fs::path& tmp) {
         CHECK(header == "instrument,symbol,ts,nq_test_plugin.spread,nq_test_plugin.mid,nq_test_plugin.buy_vol,nq_test_plugin.sell_vol,nq_test_plugin.trades");
         std::vector<std::string> rows;
         while (std::getline(in, line)) rows.push_back(line);
-        CHECK(rows.size() == 3);
+        CHECK(rows.size() == 5);
         CHECK(rows[0].rfind("1,AAA,1000000000,0.2", 0) == 0 && Has(rows[0], ",2,0,1"));
         CHECK(rows[1].rfind("1,AAA,2000000000,", 0) == 0);
-        CHECK(rows[2].rfind("2,BBB,1000000000,", 0) == 0 && Has(rows[2], "nan"));
+        CHECK(rows[2].rfind("1,AAA,3000000000,", 0) == 0);
+        CHECK(rows[3].rfind("2,BBB,1000000000,", 0) == 0 && Has(rows[3], "nan"));
+        CHECK(rows[4].rfind("2,BBB,2000000000,0.1", 0) == 0);
     }
     {
         std::ifstream in(out / "t.csv");

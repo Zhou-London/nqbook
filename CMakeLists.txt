@@ -30,11 +30,11 @@ add_library(nqbook_core STATIC
     src/Config.cpp
     src/Feature/BookAdapter.cpp
     src/Feature/Sampler.cpp
-    src/Feature/PluginSet.cpp
+    src/Feature/FeatureCatalog.cpp
     src/Feature/FeatureEngine.cpp
-    src/Market.cpp
+    src/PipelineTable.cpp
     src/QueueSink.cpp
-    src/Runner.cpp
+    src/Session.cpp
     src/Report.cpp
 )
 target_include_directories(nqbook_core PUBLIC

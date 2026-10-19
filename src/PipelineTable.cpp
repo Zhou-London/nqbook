@@ -1,28 +1,28 @@
-#include <Market.h>
+#include <PipelineTable.h>
 
 #include <string>
 
 namespace nq {
 
-Market::Market(const PluginSet& plugins, Resolver resolver, std::size_t expected_orders)
+PipelineTable::PipelineTable(const FeatureCatalog& plugins, Resolver resolver, std::size_t expected_orders)
     : plugins_(&plugins), resolver_(std::move(resolver)), expected_orders_(expected_orders) {}
 
-Market::Entry& Market::Resolve(std::uint32_t instrument) {
+PipelineTable::Entry& PipelineTable::Resolve(std::uint32_t instrument) {
     auto it = entries_.find(instrument);
     if (it != entries_.end()) return it->second;
 
-    std::optional<InstrumentSpec> spec = resolver_ ? resolver_(instrument) : std::nullopt;
+    std::optional<Instrument> spec = resolver_ ? resolver_(instrument) : std::nullopt;
     Entry entry;
     entry.stats.resolved = spec.has_value();
     if (!spec) {
         ++stats_.instrument_unknown;
-        spec = InstrumentSpec{"#" + std::to_string(instrument), 1, 1};
+        spec = Instrument{instrument, "#" + std::to_string(instrument), 1, 1};
     }
     entry.pipeline = std::make_unique<Pipeline>(*plugins_, std::move(*spec), expected_orders_);
     return entries_.emplace(instrument, std::move(entry)).first->second;
 }
 
-nlib::qty_t Market::Apply(const nlib::mbo& m) {
+nlib::qty_t PipelineTable::Apply(const nlib::mbo& m) {
     Entry& e = Resolve(m.instrument);
 
     if (stats_.events == 0) stats_.first_ts = m.ts;
@@ -35,10 +35,15 @@ nlib::qty_t Market::Apply(const nlib::mbo& m) {
     e.stats.last_ts = m.ts;
     ++e.stats.events;
 
+    for (auto& [id, other] : entries_) other.pipeline->Engine().Advance(m.ts);
     return e.pipeline->Apply(m);
 }
 
-std::size_t Market::Consume(Orderbook::Queue& q, std::size_t max) {
+void PipelineTable::Close() {
+    for (auto& [id, e] : entries_) e.pipeline->Close();
+}
+
+std::size_t PipelineTable::Consume(Orderbook::Queue& q, std::size_t max) {
     std::size_t n = 0;
     while (n < max) {
         auto m = q.try_pop();
@@ -49,12 +54,12 @@ std::size_t Market::Consume(Orderbook::Queue& q, std::size_t max) {
     return n;
 }
 
-Pipeline* Market::Find(std::uint32_t instrument) noexcept {
+Pipeline* PipelineTable::Find(std::uint32_t instrument) noexcept {
     auto it = entries_.find(instrument);
     return it == entries_.end() ? nullptr : it->second.pipeline.get();
 }
 
-const Pipeline* Market::Find(std::uint32_t instrument) const noexcept {
+const Pipeline* PipelineTable::Find(std::uint32_t instrument) const noexcept {
     auto it = entries_.find(instrument);
     return it == entries_.end() ? nullptr : it->second.pipeline.get();
 }

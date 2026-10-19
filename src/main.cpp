@@ -9,9 +9,9 @@
 #include <nq/params.hpp>
 
 #include <Config.h>
-#include <Feature/PluginSet.h>
+#include <Feature/FeatureCatalog.h>
 #include <Report.h>
-#include <Runner.h>
+#include <Session.h>
 
 namespace {
 
@@ -62,7 +62,7 @@ int Fail(int code, const std::exception& e) {
     return code;
 }
 
-int LoadPluginSet(const PluginOptions& opt, nq::PluginSet& set) {
+int LoadCatalog(const PluginOptions& opt, nq::FeatureCatalog& set) {
     std::vector<nq::SamplerSpec> specs;
     try {
         for (const auto& s : opt.samplers) {
@@ -121,24 +121,24 @@ int ParseAdapterParams(const AdapterOptions& opt, nq::ParamsBuilder& pb) {
 }
 
 int Check(const PluginOptions& popt, const std::string& format) {
-    nq::PluginSet set;
-    if (int rc = LoadPluginSet(popt, set)) return rc;
+    nq::FeatureCatalog set;
+    if (int rc = LoadCatalog(popt, set)) return rc;
 
     try {
-        nq::Pipeline probe(set, nq::InstrumentSpec{"probe", 1, 1}, 16);
+        nq::Pipeline probe(set, nq::Instrument{0, "probe", 1, 1}, 16);
     } catch (const nq::host::PluginInitError& e) {
         return Fail(kPluginInit, e);
     }
 
-    if (format == "json") nq::PrintPluginSetJson(stdout, set);
-    else nq::PrintPluginSetText(stdout, set);
+    if (format == "json") nq::PrintCatalogJson(stdout, set);
+    else nq::PrintCatalogText(stdout, set);
     return kOk;
 }
 
 int Run(const PluginOptions& popt, const AdapterOptions& aopt, const std::string& out_dir, bool feed_only) {
-    nq::PluginSet set;
+    nq::FeatureCatalog set;
     if (!feed_only) {
-        if (int rc = LoadPluginSet(popt, set)) return rc;
+        if (int rc = LoadCatalog(popt, set)) return rc;
     }
 
     nq::ParamsBuilder pb;
@@ -150,12 +150,12 @@ int Run(const PluginOptions& popt, const AdapterOptions& aopt, const std::string
     nq::RunResult result;
     try {
         nq::host::AdapterPlugin adapter(aopt.adapter);
-        nq::Runner runner(set, adapter, *pb.Build(), aopt.queue_capacity);
-        result = runner.Run(g_stop);
-        nq::PrintFeedReport(stderr, runner.GetMarket(), result);
+        nq::Session session(set, adapter, *pb.Build(), aopt.queue_capacity);
+        result = session.Run(g_stop);
+        nq::PrintFeedReport(stderr, session.Pipelines(), result);
         if (!feed_only && !out_dir.empty()) {
             try {
-                for (const auto& p : nq::WriteSamplerCsv(runner.GetMarket(), out_dir)) {
+                for (const auto& p : nq::WriteSamplerCsv(session.Pipelines(), out_dir)) {
                     std::fprintf(stderr, "wrote %s\n", p.string().c_str());
                 }
             } catch (const std::exception& e) {

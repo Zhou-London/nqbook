@@ -1,28 +1,28 @@
-#include <Runner.h>
+#include <Session.h>
 
 #include <thread>
 
 namespace nq {
 
-Runner::Runner(const PluginSet& plugins, const host::AdapterPlugin& adapter, const nq_params& adapter_params,
+Session::Session(const FeatureCatalog& plugins, const host::AdapterPlugin& adapter, const nq_params& adapter_params,
                std::size_t queue_capacity, std::size_t expected_orders)
     : sink_(queue_capacity),
       adapter_(adapter.Create(adapter_params, sink_.Raw())),
-      market_(
+      table_(
           plugins,
-          [this](std::uint32_t id) -> std::optional<InstrumentSpec> {
+          [this](std::uint32_t id) -> std::optional<Instrument> {
               auto i = adapter_.Instrument(id);
               if (!i) return std::nullopt;
-              return InstrumentSpec{i->symbol ? i->symbol : "", i->tick_size, i->lot_size};
+              return Instrument{id, i->symbol ? i->symbol : "", i->tick_size, i->lot_size};
           },
           expected_orders) {}
 
-RunResult Runner::Run(const std::atomic<bool>& stop, std::size_t batch) {
+RunResult Session::Run(const std::atomic<bool>& stop, std::size_t batch) {
     RunResult result;
     adapter_.Start();
     Orderbook::Queue& q = sink_.Queue();
     for (;;) {
-        const std::size_t n = market_.Consume(q, batch);
+        const std::size_t n = table_.Consume(q, batch);
         result.consumed += n;
         if (n > 0) {
             if (stop.load(std::memory_order_relaxed)) {
@@ -40,7 +40,8 @@ RunResult Runner::Run(const std::atomic<bool>& stop, std::size_t batch) {
     }
     if (result.interrupted) sink_.Abort();
     adapter_.Stop();
-    if (!result.interrupted) result.consumed += market_.Consume(q);
+    if (!result.interrupted) result.consumed += table_.Consume(q);
+    table_.Close();
     result.adapter_status = sink_.Ended() ? sink_.Status() : 0;
     result.stalls = sink_.Stalls();
     return result;

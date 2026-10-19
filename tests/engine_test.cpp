@@ -32,6 +32,11 @@ static mbo Clear(double t) {
     return mbo{static_cast<std::int64_t>(t * kSec), 0, 0, 0, 0, side::bid, action::clear};
 }
 
+static void Step(nq::Pipeline& pipe, const mbo& m) {
+    pipe.Engine().Advance(m.ts);
+    pipe.Apply(m);
+}
+
 static bool RowIs(const nq::RowBuffer& rows, std::size_t i, double ts_sec, double spread, double mid,
                   double buy, double sell, double trades) {
     if (i >= rows.RowCount()) return false;
@@ -60,7 +65,7 @@ static int TestAdapter() {
 }
 
 static int TestPipeline() {
-    nq::PluginSet set;
+    nq::FeatureCatalog set;
     const std::size_t idx = set.LoadPlugin(NQ_TEST_PLUGIN_PATH, "test");
     CHECK(idx == 0 && set.PluginCount() == 1);
     CHECK(set.Columns().size() == 5);
@@ -90,7 +95,7 @@ static int TestPipeline() {
     try { set.LoadPlugin(NQ_TEST_PLUGIN_PATH, "late"); } catch (const std::logic_error&) { threw = true; }
     CHECK(threw);
 
-    nq::Pipeline pipe(set, nq::InstrumentSpec{"TEST", 1, 1});
+    nq::Pipeline pipe(set, nq::Instrument{0, "TEST", 1, 1});
     nq::FeatureEngine& eng = pipe.Engine();
     CHECK(eng.SamplerCount() == 4 && eng.Columns().size() == 5);
     nq::Sampler& bars = eng.GetSampler(0);
@@ -99,35 +104,35 @@ static int TestPipeline() {
     nq::Sampler& trades = eng.GetSampler(3);
     CHECK(trades.Ncol() == 2 && trades.Rows().Columns()[0] == "test.trades");
 
-    pipe.Apply(Add(0.1, 1, side::bid, 100.50, 7));
-    pipe.Apply(Add(0.2, 2, side::ask, 100.70, 3));
-    pipe.Apply(Trade(0.5, 2, side::ask, 100.70, 2));
+    Step(pipe, Add(0.1, 1, side::bid, 100.50, 7));
+    Step(pipe, Add(0.2, 2, side::ask, 100.70, 3));
+    Step(pipe, Trade(0.5, 2, side::ask, 100.70, 2));
     CHECK(bars.Rows().Empty());
     CHECK(every3.Rows().RowCount() == 1 && RowIs(every3.Rows(), 0, 0.5, 0.20, 100.60, 2, 0, 1));
 
-    pipe.Apply(Add(1.2, 3, side::bid, 100.40, 1));
+    Step(pipe, Add(1.2, 3, side::bid, 100.40, 1));
     CHECK(bars.Rows().RowCount() == 1 && RowIs(bars.Rows(), 0, 1.0, 0.20, 100.60, 2, 0, 1));
     CHECK(filled.Rows().RowCount() == 1);
 
-    pipe.Apply(Trade(1.5, 1, side::bid, 100.50, 3));
-    pipe.Apply(Cancel(3.7, 3));
+    Step(pipe, Trade(1.5, 1, side::bid, 100.50, 3));
+    Step(pipe, Cancel(3.7, 3));
     CHECK(bars.Rows().RowCount() == 2 && RowIs(bars.Rows(), 1, 2.0, 0.20, 100.60, 0, 3, 1));
     CHECK(filled.Rows().RowCount() == 3);
     CHECK(RowIs(filled.Rows(), 1, 2.0, 0.20, 100.60, 0, 3, 1));
     CHECK(RowIs(filled.Rows(), 2, 3.0, 0.20, 100.60, 0, 0, 0));
     CHECK(every3.Rows().RowCount() == 2 && RowIs(every3.Rows(), 1, 3.7, 0.20, 100.60, 0, 3, 1));
 
-    pipe.Apply(Clear(4.1));
+    Step(pipe, Clear(4.1));
     CHECK(bars.Rows().RowCount() == 3 && RowIs(bars.Rows(), 2, 4.0, 0.20, 100.60, 0, 0, 0));
     CHECK(filled.Rows().RowCount() == 4 && RowIs(filled.Rows(), 3, 4.0, 0.20, 100.60, 0, 0, 0));
     CHECK(pipe.Book().OrderCount() == 0);
 
-    pipe.Apply(Add(4.3, 4, side::bid, 100.00, 5));
-    pipe.Apply(Add(4.4, 5, side::ask, 100.10, 5));
+    Step(pipe, Add(4.3, 4, side::bid, 100.00, 5));
+    Step(pipe, Add(4.4, 5, side::ask, 100.10, 5));
     CHECK(every3.Rows().RowCount() == 3 && RowIs(every3.Rows(), 2, 4.4, 0.10, 100.05, 0, 0, 0));
 
-    pipe.Apply(Trade(4.6, 5, side::ask, 100.10, 1));
-    pipe.Apply(Add(5.2, 6, side::bid, 99.90, 1));
+    Step(pipe, Trade(4.6, 5, side::ask, 100.10, 1));
+    Step(pipe, Add(5.2, 6, side::bid, 99.90, 1));
     CHECK(bars.Rows().RowCount() == 4 && RowIs(bars.Rows(), 3, 5.0, 0.10, 100.05, 1, 0, 1));
     CHECK(filled.Rows().RowCount() == 5 && RowIs(filled.Rows(), 4, 5.0, 0.10, 100.05, 1, 0, 1));
     CHECK(every3.Rows().RowCount() == 3);
@@ -139,14 +144,22 @@ static int TestPipeline() {
 
     CHECK(eng.FindSampler("1s") == &bars && eng.FindSampler("none") == nullptr);
     CHECK(pipe.Book().GetStats().adds == 6 && pipe.Book().GetStats().trades == 3);
+
+    pipe.Close();
+    CHECK(bars.Rows().RowCount() == 5 && RowIs(bars.Rows(), 4, 6.0, 0.10, 100.05, 0, 0, 0));
+    CHECK(filled.Rows().RowCount() == 6 && RowIs(filled.Rows(), 5, 6.0, 0.10, 100.05, 0, 0, 0));
+    CHECK(every3.Rows().RowCount() == 4 && RowIs(every3.Rows(), 3, 5.2, 0.10, 100.05, 1, 0, 1));
+    CHECK(trades.Rows().RowCount() == 3);
+    pipe.Close();
+    CHECK(bars.Rows().RowCount() == 5 && filled.Rows().RowCount() == 7 && every3.Rows().RowCount() == 4);
     return 0;
 }
 
 static int TestQueueDrain() {
-    nq::PluginSet set;
+    nq::FeatureCatalog set;
     set.LoadPlugin(NQ_TEST_PLUGIN_PATH, "test");
     set.AddSampler(nq::SamplerSpec::Time("1s", kSec));
-    nq::Pipeline pipe(set, nq::InstrumentSpec{"TEST", 1, 1});
+    nq::Pipeline pipe(set, nq::Instrument{0, "TEST", 1, 1});
     nq::Sampler& bars = pipe.Engine().GetSampler(0);
 
     nq::Orderbook::Queue q(64);
@@ -156,6 +169,8 @@ static int TestQueueDrain() {
     CHECK(pipe.Consume(q) == 3);
     CHECK(bars.Rows().RowCount() == 1 && RowIs(bars.Rows(), 0, 1.0, 1.0, 10.5, 0, 0, 0));
     CHECK(pipe.Book().BestAsk() == nullptr);
+    pipe.Close();
+    CHECK(bars.Rows().RowCount() == 2 && RowIs(bars.Rows(), 1, 2.0, NAN, NAN, 1, 0, 1));
     return 0;
 }
 

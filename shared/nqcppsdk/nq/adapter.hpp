@@ -8,6 +8,7 @@
 
 #include <nq/adapter_abi.h>
 #include <nq/event.hpp>
+#include <nq/instrument.hpp>
 #include <nq/params.hpp>
 
 #ifndef NQ_ADAPTER_ABI_HASH
@@ -45,13 +46,6 @@ struct Mbo {
         return nq_mbo{ts, id, price, qty, instrument,
                       static_cast<std::uint8_t>(side), static_cast<std::uint8_t>(action)};
     }
-};
-
-struct Instrument {
-    std::uint32_t id = 0;
-    std::string symbol;
-    std::int64_t tick_size = 1;
-    std::int64_t lot_size = 1;
 };
 
 class Sink {

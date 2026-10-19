@@ -12,7 +12,7 @@ static_assert(static_cast<std::uint8_t>(nlib::action::modify) == NQ_MODIFY);
 static_assert(static_cast<std::uint8_t>(nlib::action::trade) == NQ_TRADE);
 static_assert(static_cast<std::uint8_t>(nlib::action::clear) == NQ_CLEAR);
 
-FeatureEngine::FeatureEngine(const Orderbook& book, const PluginSet& plugins, InstrumentSpec spec)
+FeatureEngine::FeatureEngine(const Orderbook& book, const FeatureCatalog& plugins, Instrument spec)
     : adapter_(book), plugins_(&plugins), spec_(std::move(spec)) {
     instances_.reserve(plugins.PluginCount());
     for (std::size_t i = 0; i < plugins.PluginCount(); ++i) {
@@ -54,6 +54,10 @@ void FeatureEngine::Advance(std::int64_t ts) {
     for (auto& s : samplers_) s->Advance(ts, [this] { return ReadAll(); });
 }
 
+void FeatureEngine::Close() {
+    for (auto& s : samplers_) s->Close([this] { return ReadAll(); });
+}
+
 void FeatureEngine::OnEvent(const nlib::mbo& m, nlib::qty_t filled) {
     values_fresh_ = false;
     if (m.action == nlib::action::clear) {
@@ -66,7 +70,7 @@ void FeatureEngine::OnEvent(const nlib::mbo& m, nlib::qty_t filled) {
         for (auto& inst : instances_) inst.OnEvent(e, adapter_.View());
     }
     for (auto& s : samplers_) {
-        if (s->OnEvent(m.action)) s->Emit(m.ts, ReadAll());
+        if (s->OnEvent(m.ts, m.action)) s->Emit(m.ts, ReadAll());
     }
 }
 

@@ -30,11 +30,11 @@ struct SamplerTemplate {
     std::vector<SamplerColumn> columns;
 };
 
-class PluginSet {
+class FeatureCatalog {
 public:
-    PluginSet() = default;
-    PluginSet(const PluginSet&) = delete;
-    PluginSet& operator=(const PluginSet&) = delete;
+    FeatureCatalog() = default;
+    FeatureCatalog(const FeatureCatalog&) = delete;
+    FeatureCatalog& operator=(const FeatureCatalog&) = delete;
 
     std::size_t LoadPlugin(const std::string& path, std::string name = "", KeyValues params = {});
     void AddSampler(SamplerSpec spec);

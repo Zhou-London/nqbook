@@ -56,7 +56,7 @@ std::string CsvString(std::string_view s) {
 
 }  // namespace
 
-void PrintPluginSetText(std::FILE* out, const PluginSet& plugins) {
+void PrintCatalogText(std::FILE* out, const FeatureCatalog& plugins) {
     std::fprintf(out, "plugins (%zu)\n", plugins.PluginCount());
     for (std::size_t i = 0; i < plugins.PluginCount(); ++i) {
         const auto& p = plugins.Plugin(i);
@@ -80,7 +80,7 @@ void PrintPluginSetText(std::FILE* out, const PluginSet& plugins) {
     }
 }
 
-void PrintPluginSetJson(std::FILE* out, const PluginSet& plugins) {
+void PrintCatalogJson(std::FILE* out, const FeatureCatalog& plugins) {
     std::fprintf(out, "{\n  \"plugins\": [");
     for (std::size_t i = 0; i < plugins.PluginCount(); ++i) {
         const auto& p = plugins.Plugin(i);
@@ -117,17 +117,17 @@ void PrintPluginSetJson(std::FILE* out, const PluginSet& plugins) {
     std::fprintf(out, "\n  ]\n}\n");
 }
 
-void PrintFeedReport(std::FILE* out, const Market& market, const RunResult& result) {
-    const FeedStats& f = market.Stats();
+void PrintFeedReport(std::FILE* out, const PipelineTable& table, const RunResult& result) {
+    const FeedStats& f = table.Stats();
     std::fprintf(out, "feed  events=%llu instruments=%zu ts_regressions=%llu instrument_unknown=%llu stalls=%llu first_ts=%lld last_ts=%lld adapter_status=%d%s\n",
-                 static_cast<unsigned long long>(f.events), market.InstrumentCount(),
+                 static_cast<unsigned long long>(f.events), table.InstrumentCount(),
                  static_cast<unsigned long long>(f.ts_regressions),
                  static_cast<unsigned long long>(f.instrument_unknown),
                  static_cast<unsigned long long>(result.stalls), static_cast<long long>(f.first_ts),
                  static_cast<long long>(f.last_ts), result.adapter_status, result.interrupted ? " interrupted" : "");
 
     Orderbook::Stats total;
-    for (const auto& [id, e] : market.Entries()) {
+    for (const auto& [id, e] : table.Entries()) {
         const Orderbook::Stats& s = e.pipeline->Book().GetStats();
         total.adds += s.adds;
         total.cancels += s.cancels;
@@ -160,8 +160,8 @@ void PrintFeedReport(std::FILE* out, const Market& market, const RunResult& resu
     print_stats(total);
     std::fprintf(out, "\n");
 
-    for (const auto& [id, e] : market.Entries()) {
-        const auto& spec = e.pipeline->Engine().Instrument();
+    for (const auto& [id, e] : table.Entries()) {
+        const auto& spec = e.pipeline->Engine().GetInstrument();
         const Orderbook& book = e.pipeline->Book();
         std::fprintf(out, "  %-6u %-16s %s events=%llu ts_regressions=%llu orders=%zu bid_levels=%zu ask_levels=%zu  ",
                      id, spec.symbol.c_str(), e.stats.resolved ? "" : "(unresolved)",
@@ -173,10 +173,10 @@ void PrintFeedReport(std::FILE* out, const Market& market, const RunResult& resu
     }
 }
 
-std::vector<std::filesystem::path> WriteSamplerCsv(const Market& market, const std::filesystem::path& dir) {
+std::vector<std::filesystem::path> WriteSamplerCsv(const PipelineTable& table, const std::filesystem::path& dir) {
     std::filesystem::create_directories(dir);
     std::vector<std::filesystem::path> written;
-    const auto& templates = market.Plugins().Samplers();
+    const auto& templates = table.Plugins().Samplers();
     for (std::size_t si = 0; si < templates.size(); ++si) {
         const SamplerTemplate& t = templates[si];
         const std::filesystem::path path = dir / (t.spec.name + ".csv");
@@ -187,8 +187,8 @@ std::vector<std::filesystem::path> WriteSamplerCsv(const Market& market, const s
         for (const auto& n : t.names) std::fprintf(f.get(), ",%s", CsvString(n).c_str());
         std::fprintf(f.get(), "\n");
 
-        for (const auto& [id, e] : market.Entries()) {
-            const std::string symbol = CsvString(e.pipeline->Engine().Instrument().symbol);
+        for (const auto& [id, e] : table.Entries()) {
+            const std::string symbol = CsvString(e.pipeline->Engine().GetInstrument().symbol);
             const RowBuffer& rows = e.pipeline->Engine().GetSampler(si).Rows();
             for (std::size_t r = 0; r < rows.RowCount(); ++r) {
                 std::fprintf(f.get(), "%u,%s,%lld", id, symbol.c_str(), static_cast<long long>(rows.Ts(r)));

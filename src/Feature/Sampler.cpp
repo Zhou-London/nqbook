@@ -11,13 +11,16 @@ Sampler::Sampler(SamplerSpec spec, std::vector<std::string> names, std::vector<S
       last_(columns_.size(), 0.0),
       row_(columns_.size(), 0.0) {}
 
-bool Sampler::OnEvent(nlib::action a) noexcept {
+bool Sampler::OnEvent(std::int64_t ts, nlib::action a) noexcept {
+    last_ts_ = ts;
     switch (spec_.trigger) {
         case Trigger::Events: break;
         case Trigger::Trades:
             if (a != nlib::action::trade) return false;
             break;
-        case Trigger::Time: return false;
+        case Trigger::Time:
+            dirty_ = true;
+            return false;
     }
     if (++count_ < spec_.every) return false;
     count_ = 0;
@@ -35,6 +38,7 @@ void Sampler::Emit(std::int64_t ts, std::span<const double> values) {
         }
     }
     rows_.Push(ts, row_);
+    dirty_ = false;
 }
 
 void Sampler::ResetBaseline() noexcept {
