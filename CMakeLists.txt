@@ -15,7 +15,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 add_subdirectory(shared/nlib)
-add_subdirectory(sdk)
+add_subdirectory(shared/nqcppsdk)
 
 add_library(orderbook_core STATIC
     src/Orderbook.cpp
@@ -24,7 +24,7 @@ add_library(orderbook_core STATIC
 target_include_directories(orderbook_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(orderbook_core PUBLIC nlib::nlib nq::sdk)
+target_link_libraries(orderbook_core PUBLIC nlib::nlib nqcppsdk::nqcppsdk)
 target_compile_options(orderbook_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(orderbook src/main.cpp)

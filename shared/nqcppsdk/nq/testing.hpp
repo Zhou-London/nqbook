@@ -36,10 +36,10 @@ private:
     static const MockBook& Self(const void* ctx) noexcept { return *static_cast<const MockBook*>(ctx); }
 
     static int Best(const void* ctx, std::uint8_t side, Level* out) noexcept {
-        return Depth(ctx, side, 0, out);
+        return GetLevel(ctx, side, 0, out);
     }
 
-    static int Depth(const void* ctx, std::uint8_t side, std::uint32_t k, Level* out) noexcept {
+    static int GetLevel(const void* ctx, std::uint8_t side, std::uint32_t k, Level* out) noexcept {
         const auto& levels = side == NQ_BID ? Self(ctx).bids_ : Self(ctx).asks_;
         if (k >= levels.size()) return 1;
         *out = levels[k];
@@ -51,7 +51,7 @@ private:
     std::vector<Level> bids_;
     std::vector<Level> asks_;
     std::int64_t ts_ = 0;
-    nq_book_view view_{this, &MockBook::Best, &MockBook::Depth, &MockBook::Ts};
+    nq_book_view view_{this, &MockBook::Best, &MockBook::GetLevel, &MockBook::Ts};
 };
 
 inline nq_event MakeEvent(Action action, std::int64_t ts, std::uint64_t id, Side side,
@@ -80,7 +80,7 @@ inline nq_event Trade(std::int64_t ts, std::uint64_t maker_id, Side maker_side,
     return MakeEvent(Action::Trade, ts, maker_id, maker_side, price, qty, filled);
 }
 
-inline nq_event ClearEvent(std::int64_t ts) noexcept {
+inline nq_event Clear(std::int64_t ts) noexcept {
     return MakeEvent(Action::Clear, ts, 0, Side::Bid, 0, 0);
 }
 

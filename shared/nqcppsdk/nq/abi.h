@@ -47,7 +47,7 @@ typedef struct nq_level {
 typedef struct nq_book_view {
     const void* ctx;
     int (*best)(const void* ctx, uint8_t side, nq_level* out);
-    int (*depth)(const void* ctx, uint8_t side, uint32_t k, nq_level* out);
+    int (*level)(const void* ctx, uint8_t side, uint32_t k, nq_level* out);
     int64_t (*ts)(const void* ctx);
 } nq_book_view;
 
@@ -80,7 +80,7 @@ typedef struct nq_column {
 typedef struct nq_schema {
     uint64_t abi_hash;
     const char* sdk_version;
-    uint8_t fidelity;
+    uint8_t requirement;
     uint32_t ncol;
     const nq_column* cols;
 } nq_schema;

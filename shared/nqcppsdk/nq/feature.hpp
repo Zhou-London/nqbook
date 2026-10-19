@@ -15,7 +15,7 @@
 #include <nq/params.hpp>
 
 #ifndef NQ_ABI_HASH
-#error "NQ_ABI_HASH is not defined: link the target against nq::sdk"
+#error "NQ_ABI_HASH is not defined: link the target against nqcppsdk::nqcppsdk"
 #endif
 
 namespace nq {

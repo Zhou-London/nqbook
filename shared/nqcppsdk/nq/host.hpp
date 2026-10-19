@@ -12,7 +12,7 @@
 #include <nq/abi.h>
 
 #ifndef NQ_ABI_HASH
-#error "NQ_ABI_HASH is not defined: link the target against nq::sdk"
+#error "NQ_ABI_HASH is not defined: link the target against nqcppsdk::nqcppsdk"
 #endif
 
 namespace nq::host {
@@ -26,20 +26,20 @@ struct PluginFns {
     nq_on_control_fn on_control = nullptr;
 };
 
-class Instance {
+class PluginInstance {
 public:
-    Instance(void* state, const PluginFns& fns, const nq_schema* schema) noexcept
+    PluginInstance(void* state, const PluginFns& fns, const nq_schema* schema) noexcept
         : state_(state), fns_(fns), schema_(schema) {}
 
-    ~Instance() { Release(); }
+    ~PluginInstance() { Release(); }
 
-    Instance(const Instance&) = delete;
-    Instance& operator=(const Instance&) = delete;
+    PluginInstance(const PluginInstance&) = delete;
+    PluginInstance& operator=(const PluginInstance&) = delete;
 
-    Instance(Instance&& other) noexcept
+    PluginInstance(PluginInstance&& other) noexcept
         : state_(std::exchange(other.state_, nullptr)), fns_(other.fns_), schema_(other.schema_) {}
 
-    Instance& operator=(Instance&& other) noexcept {
+    PluginInstance& operator=(PluginInstance&& other) noexcept {
         if (this != &other) {
             Release();
             state_ = std::exchange(other.state_, nullptr);
@@ -57,7 +57,7 @@ public:
     }
 
     void Read(std::span<double> out, const nq_book_view& book) {
-        if (out.size() < schema_->ncol) throw std::length_error("nq::host::Instance::Read: output too small");
+        if (out.size() < schema_->ncol) throw std::length_error("nq::host::PluginInstance::Read: output too small");
         fns_.read(state_, &book, out.data());
     }
 
@@ -136,10 +136,10 @@ public:
         return std::span<const nq_column>(schema_->cols, schema_->ncol);
     }
 
-    Instance Create(const nq_params& params) const {
+    PluginInstance Create(const nq_params& params) const {
         void* state = fns_.init(&params);
         if (!state) throw std::runtime_error("nq_init failed: " + path_);
-        return Instance(state, fns_, schema_);
+        return PluginInstance(state, fns_, schema_);
     }
 
 private:

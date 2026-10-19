@@ -5,7 +5,7 @@
 #include <limits>
 #include <span>
 
-#include <nq/sdk.hpp>
+#include <nq/nqcppsdk.hpp>
 
 namespace nq_test {
 

@@ -1,14 +1,21 @@
+cmake_minimum_required(VERSION 3.28)
+
+project(nqcppsdk
+    VERSION 0.1.0
+    LANGUAGES C CXX
+)
+
 file(SHA256 ${CMAKE_CURRENT_SOURCE_DIR}/nq/abi.h NQ_ABI_SHA256)
 string(SUBSTRING "${NQ_ABI_SHA256}" 0 16 NQ_ABI_HASH_HEX)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/nq/abi.h)
 
-add_library(nq_sdk INTERFACE)
-add_library(nq::sdk ALIAS nq_sdk)
-target_include_directories(nq_sdk INTERFACE
+add_library(nqcppsdk INTERFACE)
+add_library(nqcppsdk::nqcppsdk ALIAS nqcppsdk)
+target_include_directories(nqcppsdk INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
 )
-target_compile_features(nq_sdk INTERFACE cxx_std_23)
-target_compile_definitions(nq_sdk INTERFACE NQ_ABI_HASH=0x${NQ_ABI_HASH_HEX}ULL)
+target_compile_features(nqcppsdk INTERFACE cxx_std_23)
+target_compile_definitions(nqcppsdk INTERFACE NQ_ABI_HASH=0x${NQ_ABI_HASH_HEX}ULL)
 
 set(NQ_ABI_HASH "0x${NQ_ABI_HASH_HEX}" CACHE INTERNAL "")
 

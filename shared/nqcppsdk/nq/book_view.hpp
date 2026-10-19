@@ -20,9 +20,9 @@ public:
         return out;
     }
 
-    std::optional<Level> Depth(Side side, std::uint32_t k) const noexcept {
+    std::optional<Level> GetLevel(Side side, std::uint32_t k) const noexcept {
         Level out;
-        if (view_->depth(view_->ctx, static_cast<std::uint8_t>(side), k, &out) != 0) return std::nullopt;
+        if (view_->level(view_->ctx, static_cast<std::uint8_t>(side), k, &out) != 0) return std::nullopt;
         return out;
     }
 

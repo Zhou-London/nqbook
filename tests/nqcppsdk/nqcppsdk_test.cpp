@@ -32,8 +32,8 @@ static int TestSandbox() {
     sb.Book().SetBids({{10050, 70, 2}, {10040, 10, 1}}).SetAsks({{10070, 30, 1}}).SetTs(7);
     v = sb.Read();
     CHECK(Near(v[0], 0.20) && Near(v[1], 100.60));
-    CHECK(sb.Book().View().Depth(Side::Bid, 1)->price == 10040);
-    CHECK(!sb.Book().View().Depth(Side::Bid, 2));
+    CHECK(sb.Book().View().GetLevel(Side::Bid, 1)->price == 10040);
+    CHECK(!sb.Book().View().GetLevel(Side::Bid, 2));
     CHECK(sb.Book().View().Ts() == 7);
 
     sb.Feed(Add(1, 1, Side::Bid, 10050, 70));
@@ -54,7 +54,7 @@ static int TestPlugin() {
     const nq_schema& s = plugin.Schema();
     CHECK(s.abi_hash == NQ_ABI_HASH);
     CHECK(std::strcmp(s.sdk_version, NQ_SDK_VERSION) == 0);
-    CHECK(s.fidelity == NQ_REQUIRES_MBO);
+    CHECK(s.requirement == NQ_REQUIRES_MBO);
     CHECK(s.ncol == 5);
     CHECK(std::strcmp(plugin.Columns()[0].name, "spread") == 0);
     CHECK(std::strcmp(plugin.Columns()[4].name, "trades") == 0);
@@ -62,7 +62,7 @@ static int TestPlugin() {
 
     nq::ParamsBuilder pb;
     pb.Symbol("TEST").PriceScale(100).QtyScale(10);
-    nq::host::Instance inst = plugin.Create(*pb.Build());
+    nq::host::PluginInstance inst = plugin.Create(*pb.Build());
     CHECK(inst.Ncol() == 5);
 
     nq::testing::MockBook book;

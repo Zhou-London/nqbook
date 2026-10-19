@@ -1,6 +1,6 @@
 function(nq_add_plugin name)
     add_library(${name} MODULE ${ARGN})
-    target_link_libraries(${name} PRIVATE nq::sdk)
+    target_link_libraries(${name} PRIVATE nqcppsdk::nqcppsdk)
     set_target_properties(${name} PROPERTIES
         PREFIX ""
         SUFFIX ".so"
