@@ -22,6 +22,8 @@ enum nq_action { NQ_ADD = 0, NQ_CANCEL = 1, NQ_MODIFY = 2, NQ_TRADE = 3, NQ_CLEA
 
 enum nq_requires { NQ_REQUIRES_L1 = 1, NQ_REQUIRES_MBP = 2, NQ_REQUIRES_MBO = 3 };
 
+enum nq_column_kind { NQ_COLUMN_SNAPSHOT = 0, NQ_COLUMN_CUMULATIVE = 1 };
+
 enum nq_control_type {
     NQ_CONTROL_RESET = 0,
     NQ_CONTROL_SESSION_START = 1,
@@ -75,6 +77,7 @@ typedef struct nq_column {
     const char* name;
     const char* unit;
     const char* doc;
+    uint8_t kind;
 } nq_column;
 
 typedef struct nq_schema {

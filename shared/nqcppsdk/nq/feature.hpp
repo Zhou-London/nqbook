@@ -22,16 +22,26 @@ namespace nq {
 
 using Column = nq_column;
 
+inline constexpr std::uint8_t kSnapshot = NQ_COLUMN_SNAPSHOT;
+inline constexpr std::uint8_t kCumulative = NQ_COLUMN_CUMULATIVE;
+
 enum class Requires : std::uint8_t {
     L1 = NQ_REQUIRES_L1,
     MBP = NQ_REQUIRES_MBP,
     MBO = NQ_REQUIRES_MBO
 };
 
+struct ColumnDef {
+    const char* name;
+    const char* unit = "";
+    const char* doc = "";
+    std::uint8_t kind = kSnapshot;
+};
+
 template <std::size_t N>
-constexpr std::array<Column, N> MakeColumns(const Column (&cols)[N]) {
+constexpr std::array<Column, N> MakeColumns(const ColumnDef (&cols)[N]) {
     std::array<Column, N> out{};
-    for (std::size_t i = 0; i < N; ++i) out[i] = cols[i];
+    for (std::size_t i = 0; i < N; ++i) out[i] = Column{cols[i].name, cols[i].unit, cols[i].doc, cols[i].kind};
     return out;
 }
 

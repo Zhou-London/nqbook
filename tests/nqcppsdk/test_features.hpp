@@ -36,9 +36,9 @@ private:
 
 struct TradeVolume : nq::FeatureBase {
     static constexpr auto kColumns = nq::MakeColumns({
-        {"buy_vol", "qty", "cumulative aggressor-buy volume"},
-        {"sell_vol", "qty", "cumulative aggressor-sell volume"},
-        {"trades", "count", "cumulative trade count"},
+        {"buy_vol", "qty", "cumulative aggressor-buy volume", nq::kCumulative},
+        {"sell_vol", "qty", "cumulative aggressor-sell volume", nq::kCumulative},
+        {"trades", "count", "cumulative trade count", nq::kCumulative},
     });
 
     explicit TradeVolume(const nq::Params& p)

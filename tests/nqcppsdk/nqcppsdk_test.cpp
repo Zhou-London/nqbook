@@ -59,6 +59,8 @@ static int TestPlugin() {
     CHECK(std::strcmp(plugin.Columns()[0].name, "spread") == 0);
     CHECK(std::strcmp(plugin.Columns()[4].name, "trades") == 0);
     CHECK(std::strcmp(plugin.Columns()[4].unit, "count") == 0);
+    CHECK(plugin.Columns()[0].kind == NQ_COLUMN_SNAPSHOT);
+    CHECK(plugin.Columns()[4].kind == NQ_COLUMN_CUMULATIVE);
 
     nq::ParamsBuilder pb;
     pb.Symbol("TEST").PriceScale(100).QtyScale(10);

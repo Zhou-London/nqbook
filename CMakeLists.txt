@@ -19,12 +19,14 @@ add_subdirectory(shared/nqcppsdk)
 
 add_library(orderbook_core STATIC
     src/Orderbook.cpp
+    src/Feature/BookAdapter.cpp
+    src/Feature/Sampler.cpp
     src/Feature/FeatureEngine.cpp
 )
 target_include_directories(orderbook_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(orderbook_core PUBLIC nlib::nlib nqcppsdk::nqcppsdk)
+target_link_libraries(orderbook_core PUBLIC nlib::nlib nqcppsdk::nqcppsdk ${CMAKE_DL_LIBS})
 target_compile_options(orderbook_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(orderbook src/main.cpp)
