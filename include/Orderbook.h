@@ -2,63 +2,106 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <map>
+#include <memory>
+#include <vector>
 
 #include <nlib/common.h>
-#include <nlib/hive.h>
+#include <nq/abi.h>
+
+#include <Defaults.h>
 #include <nlib/map.h>
+#include <nlib/memory_pool.h>
+#include <nlib/single_queue.h>
 
 namespace nq {
+
 class Orderbook {
 public:
-  void OnOrder(const nlib::order &o);
-  void OnTrade(const nlib::trade &t);
-  void OnCancel(const nlib::cancel &c);
-  void OnLevel(const nlib::level &l);
-  nlib::book OnSnapshot() const;
+    using Queue = nlib::single_queue<nq_mbo>;
+    using BidLevels = std::map<nlib::price_t, nlib::level, std::greater<nlib::price_t>>;
+    using AskLevels = std::map<nlib::price_t, nlib::level, std::less<nlib::price_t>>;
 
-  std::size_t size() const { return by_id_.size(); }
-  std::size_t
-  MemoryBytes() const; // Appromixates the memory cost of orderbook instance
+    struct Stats {
+        std::uint64_t adds = 0;
+        std::uint64_t cancels = 0;
+        std::uint64_t modifies = 0;
+        std::uint64_t trades = 0;
+        std::uint64_t clears = 0;
+        std::uint64_t add_duplicate = 0;
+        std::uint64_t cancel_unknown = 0;
+        std::uint64_t modify_unknown = 0;
+        std::uint64_t trade_unknown = 0;
+        std::uint64_t trade_over_level = 0;
+        std::uint64_t trade_over_order = 0;
+        std::uint64_t qty_invalid = 0;
+    };
+
+    explicit Orderbook(std::size_t expected_orders = defaults::kExpectedOrders);
+    ~Orderbook() = default;
+
+    Orderbook(const Orderbook&) = delete;
+    Orderbook& operator=(const Orderbook&) = delete;
+
+    // Feed Handlers
+    nlib::qty_t Apply(const nq_mbo& m);
+    std::size_t Consume(Queue& q, std::size_t max = std::numeric_limits<std::size_t>::max());
+
+    void OnOrder(const nq_mbo& m);
+    void OnCancel(const nq_mbo& m);
+    void OnModify(const nq_mbo& m);
+    nlib::qty_t OnTrade(const nq_mbo& m);
+    void OnClear(const nq_mbo& m);
+
+    // Queries
+    const nlib::level* BestBid() const noexcept;
+    const nlib::level* BestAsk() const noexcept;
+    const BidLevels& Bids() const noexcept { return bids_; }
+    const AskLevels& Asks() const noexcept { return asks_; }
+    const nlib::level* FindLevel(std::uint8_t s, nlib::price_t p) const noexcept;
+    const nlib::order* FindOrder(nlib::order_id id) const noexcept;
+
+    std::size_t OrderCount() const noexcept { return orders_.size(); }
+    std::size_t BidLevelCount() const noexcept { return bids_.size(); }
+    std::size_t AskLevelCount() const noexcept { return asks_.size(); }
+
+    nlib::ns_t LastTs() const noexcept { return last_ts_; }
+    const Stats& GetStats() const noexcept { return stats_; }
+
 private:
-  // ---------- Helper functions ----------
-  // Rests a limit order; drops repeated ids.
-  void Add(const nlib::order &o);
+    class OrderPool {
+    public:
+        explicit OrderPool(std::size_t chunk);
 
-  // Sets an order's remaining quantity, requeueing it on a price change.
-  void Modify(const nlib::order &o);
+        nlib::order* Alloc();
+        void Free(nlib::order* o) noexcept;
+        void Reset() noexcept;
 
-  // Stamps later snapshots with instrument_id and the two event times.
-  void Touch(std::uint32_t instrument_id, std::int64_t event_ns,
-             std::int64_t recv_ns);
+    private:
+        std::size_t chunk_;
+        std::vector<std::unique_ptr<nlib::memory_pool>> chunks_;
+        nlib::order* free_ = nullptr;
+    };
 
-  // Links n to its price level, creating the level if absent.
-  void LinkOrders(nlib::order *n);
+    nlib::order* MutableOrder(nlib::order_id id) noexcept;
+    nlib::level* FindOrCreateLevel(std::uint8_t s, nlib::price_t p);
+    nlib::level* MutableLevel(std::uint8_t s, nlib::price_t p) noexcept;
+    void RemoveLevel(nlib::level* lv, std::uint8_t s);
 
-  // Unlinks order from its price level, erasing the level if order was the
-  // last.
-  void UnlinkOrders(nlib::order *n);
+    static void LinkOrder(nlib::order* o, nlib::level* lv) noexcept;
+    void UnlinkOrder(nlib::order* o);
+    void RemoveOrder(nlib::order* o);
+    nlib::qty_t Fill(nlib::order* o, nlib::qty_t qty);
+    nlib::qty_t FillLevel(std::uint8_t s, nlib::price_t p, nlib::qty_t qty);
 
-  // Unlinks order, frees its storage and its id entry.
-  void Erase(nlib::order *n);
-
-  // Shrinks order by qty
-  void Reduce(std::int64_t order_id, std::int64_t qty);
-
-  // Returns the corresponding level
-  nlib::price_level &FindLevel(nlib::order *n);
-
-private:
-  // ----------- Member Variables ----------
-  using PriceLevelMap = std::map<std::int64_t, nlib::price_level>;
-
-  nlib::hive<nlib::order> orders_;
-  nlib::map<std::int64_t, nlib::order *> by_id_;
-  PriceLevelMap bids_;
-  PriceLevelMap asks_;
-  std::int64_t event_ns_ = 0;
-  std::int64_t recv_ns_ = 0;
-  std::uint32_t instrument_id_ = 0;
+    BidLevels bids_;
+    AskLevels asks_;
+    nlib::map<nlib::order_id, nlib::order*> orders_;
+    OrderPool pool_;
+    Stats stats_;
+    nlib::ns_t last_ts_ = 0;
 };
 
-} // namespace nq
+}  // namespace nq

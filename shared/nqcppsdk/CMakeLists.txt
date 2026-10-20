@@ -1,0 +1,45 @@
+cmake_minimum_required(VERSION 3.28)
+
+project(nqcppsdk
+    VERSION 0.1.0
+    LANGUAGES C CXX
+)
+
+set(NQ_SHARED_ABI ${CMAKE_CURRENT_SOURCE_DIR}/nq/abi.h)
+set(NQ_FEATURE_ABI ${CMAKE_CURRENT_SOURCE_DIR}/nq/feature_abi.h)
+set(NQ_ADAPTER_ABI ${CMAKE_CURRENT_SOURCE_DIR}/nq/adapter_abi.h)
+
+file(SHA256 ${NQ_SHARED_ABI} NQ_SHARED_SHA256)
+file(SHA256 ${NQ_FEATURE_ABI} NQ_FEATURE_FILE_SHA256)
+file(SHA256 ${NQ_ADAPTER_ABI} NQ_ADAPTER_FILE_SHA256)
+string(SHA256 NQ_FEATURE_SHA256 "${NQ_SHARED_SHA256}${NQ_FEATURE_FILE_SHA256}")
+string(SHA256 NQ_ADAPTER_SHA256 "${NQ_SHARED_SHA256}${NQ_ADAPTER_FILE_SHA256}")
+string(SUBSTRING "${NQ_FEATURE_SHA256}" 0 16 NQ_ABI_HASH_HEX)
+string(SUBSTRING "${NQ_ADAPTER_SHA256}" 0 16 NQ_ADAPTER_ABI_HASH_HEX)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${NQ_SHARED_ABI}
+    ${NQ_FEATURE_ABI}
+    ${NQ_ADAPTER_ABI}
+)
+
+add_library(nqcppsdk INTERFACE)
+add_library(nqcppsdk::nqcppsdk ALIAS nqcppsdk)
+target_include_directories(nqcppsdk INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+)
+target_compile_features(nqcppsdk INTERFACE cxx_std_23)
+target_compile_definitions(nqcppsdk INTERFACE
+    NQ_ABI_HASH=0x${NQ_ABI_HASH_HEX}ULL
+    NQ_ADAPTER_ABI_HASH=0x${NQ_ADAPTER_ABI_HASH_HEX}ULL
+)
+
+set(NQ_ABI_HASH "0x${NQ_ABI_HASH_HEX}" CACHE INTERNAL "")
+set(NQ_ADAPTER_ABI_HASH "0x${NQ_ADAPTER_ABI_HASH_HEX}" CACHE INTERNAL "")
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NqPlugin.cmake)
+
+option(NQCPPSDK_BUILD_TESTS "Build the nqcppsdk tests" ${PROJECT_IS_TOP_LEVEL})
+if(NQCPPSDK_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

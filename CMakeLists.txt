@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(nqbook
-    VERSION 0.5.0
-    LANGUAGES CXX
+project(orderbook
+    VERSION 2.0.0
+    LANGUAGES C CXX
 )
 
 set(CMAKE_CXX_STANDARD 23)
@@ -10,33 +10,62 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_subdirectory(third_party/nlib)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
 
-find_package(Arrow REQUIRED)
-find_package(Parquet REQUIRED)
-find_package(cppzmq REQUIRED)
+include(FetchContent)
+FetchContent_Declare(nlib
+    GIT_REPOSITORY https://github.com/Zhou-London/nlib.git
+    GIT_TAG v0.6.0
+    GIT_SHALLOW ON
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shared/nlib
+)
+FetchContent_Declare(nqcppsdk
+    GIT_REPOSITORY https://github.com/Zhou-London/nqcppsdk.git
+    GIT_TAG v0.1.0
+    GIT_SHALLOW ON
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shared/nqcppsdk
+)
+FetchContent_Declare(cli11
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+    GIT_TAG v2.5.0
+    GIT_SHALLOW ON
+)
+FetchContent_MakeAvailable(nlib nqcppsdk cli11)
 
-add_executable(nqbook
+find_package(Arrow REQUIRED CONFIG)
+find_package(Parquet REQUIRED CONFIG)
+
+add_library(nqbook_core STATIC
     src/Orderbook.cpp
     src/Config.cpp
-    src/ParquetWriter.cpp
-    src/main.cpp
-    src/Threads/FeedThread.cpp
-    src/Threads/BookThread.cpp
-    src/Threads/WriterThread.cpp
-    src/Threads/MetricsThread.cpp
+    src/Feature/OrderbookView.cpp
+    src/Feature/Sampler.cpp
+    src/Feature/FeatureCatalog.cpp
+    src/Feature/FeatureEngine.cpp
+    src/PipelineTable.cpp
+    src/Adapter/AdapterEngine.cpp
+    src/Session.cpp
+    src/Report.cpp
+    src/Writer/CsvWriter.cpp
+    src/Writer/ParquetWriter.cpp
+    src/Writer/WriterEngine.cpp
 )
+target_include_directories(nqbook_core PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+target_link_libraries(nqbook_core PUBLIC nlib::nlib nqcppsdk::nqcppsdk Parquet::parquet_shared ${CMAKE_DL_LIBS})
+target_compile_options(nqbook_core PRIVATE -Wall -Wextra -Wpedantic)
 
-target_include_directories(nqbook PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
-)
-target_compile_definitions(nqbook PRIVATE
-    NQBOOK_VERSION="${PROJECT_VERSION}"
-)
-target_link_libraries(nqbook PRIVATE
-    nlib::nlib
-    Arrow::arrow_shared
-    Parquet::parquet_shared
-    cppzmq
-)
+add_subdirectory(plugins)
+
+add_executable(nqbook src/main.cpp)
+target_link_libraries(nqbook PRIVATE nqbook_core CLI11::CLI11)
+target_compile_options(nqbook PRIVATE -Wall -Wextra -Wpedantic)
+
+option(ORDERBOOK_BUILD_TESTS "Build the orderbook tests" ${PROJECT_IS_TOP_LEVEL})
+if(ORDERBOOK_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
