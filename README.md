@@ -1,7 +1,7 @@
-<p align="center"><img src="https://capsule-render.vercel.app/api?type=pulse&height=240&color=gradient&text=NQBook&fontSize=64&fontAlign=50&fontAlignY=42&desc=v0.1.1&descSize=22&descAlign=50&descAlignY=62" /></p>
+<p align="center"><img src="https://capsule-render.vercel.app/api?type=pulse&height=240&color=gradient&text=NQBook&fontSize=64&fontAlign=50&fontAlignY=42&desc=v0.1.3&descSize=22&descAlign=50&descAlignY=62" /></p>
 
 <p align="center">
-  <img alt="Version 0.1.1" src="https://img.shields.io/badge/version-0.1.1-blue" />
+  <img alt="Version 0.1.3" src="https://img.shields.io/badge/version-0.1.3-blue" />
   <img alt="C++23" src="https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white" />
   <img alt="CMake 3.28+" src="https://img.shields.io/badge/CMake-3.28%2B-064F8C?logo=cmake&logoColor=white" />
   <img alt="Apache Arrow / Parquet" src="https://img.shields.io/badge/output-Parquet-50ABF1?logo=apache&logoColor=white" />
