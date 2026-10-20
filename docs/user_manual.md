@@ -1,6 +1,6 @@
 # NQBook User Manual
 
-This manual is for people and automated harnesses that run the `nqbook` binary and write plugins for it with NQCPPSDK. It describes the command line, the file formats, and the plugin API. It does not describe how `nqbook` works inside.
+This manual is for people and automated harnesses that run the `nqbook` binary and write plugins for it with NQCPPSDK. It describes the command line, the file formats, and the plugin API.
 
 ## 1. What you have
 
