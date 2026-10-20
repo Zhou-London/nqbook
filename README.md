@@ -18,7 +18,7 @@ Data sources and feature computations are plugins. NQBook loads them with `dlope
 
 | Term | Meaning |
 |---|---|
-| event | one `mbo` record: an add, cancel, modify, trade, or clear for one order |
+| event | one MBO record: an add, cancel, modify, trade, or clear for one order |
 | instrument | one tradable thing with its own order book, identified by a `uint32` id the adapter assigns |
 | adapter | a plugin that produces the event stream, from a file or a live feed |
 | feature | a plugin that computes numbers from a book |
@@ -49,8 +49,7 @@ Outputs:
 ```
 build/nqbook                                   the executable
 build/plugins/features/example_features.so     example feature plugin: spread, mid, volume by side
-build/plugins/adapters/replay.so               adapter that replays an .mbo file
-build/plugins/adapters/synthetic.so            adapter that generates synthetic events, for tests
+build/plugins/adapters/synthetic.so            adapter that generates synthetic events
 ```
 
 ## First run
@@ -108,9 +107,9 @@ build/nqbook check --plugin build/plugins/features/example_features.so --format 
 ### run
 
 ```bash
-build/nqbook run --adapter build/plugins/adapters/replay.so --adapter-param path=day.mbo \
+build/nqbook run --adapter build/plugins/adapters/synthetic.so --adapter-param count=100000 \
                  --plugin-dir build/plugins/features \
-                 --sampler 1s=time:1s --sampler 5s=time:5s --sampler t=trades:1 \
+                 --sampler e=events:1000 --sampler t=trades:1 \
                  --out-dir out
 ```
 
@@ -127,10 +126,10 @@ Ctrl-C or SIGTERM stops a run cleanly. The adapter thread exits, the bars that h
 ### check-feed
 
 ```bash
-build/nqbook check-feed --adapter build/plugins/adapters/replay.so --adapter-param path=day.mbo
+build/nqbook check-feed --adapter build/plugins/adapters/synthetic.so --adapter-param count=100000
 ```
 
-`check-feed` validates an adapter or a data file. The report has one `feed` line for the whole market, one `book` line that sums all books, and one line per instrument:
+`check-feed` validates an adapter. The report has one `feed` line for the whole market, one `book` line that sums all books, and one line per instrument:
 
 ```
 feed  events=300000 instruments=5 ts_regressions=0 instrument_unknown=0 stalls=135282 first_ts=... last_ts=... adapter_status=0
@@ -180,6 +179,15 @@ min_qty=1
 | `--queue-capacity N` | capacity of the queue from the adapter to the books. Default 65536. Rounded up to a power of two |
 
 An adapter reads a `.params` file in the same way as a plugin.
+
+Parameters of `synthetic.so`:
+
+| Parameter | Meaning |
+|---|---|
+| `count` | number of events to generate. Required |
+| `instruments` | number of instruments. Default 1 |
+| `endless` | `true` keeps generating until the run is stopped. Default `false` |
+| `fail_after` | ends the stream with an error after this many events. Default 0, never |
 
 ### Samplers
 
@@ -231,7 +239,3 @@ With `--out-format csv` each sampler becomes `<sampler>.csv` with the columns `i
 | 8 | opening or writing the output failed |
 | 130 | interrupted by SIGINT or SIGTERM |
 | 100 and above | command-line usage error |
-
-## Replay files
-
-`replay.so` reads the `.mbo` format defined by NQCPPSDK: a 16-byte header, a 48-byte record per instrument, then 40-byte events to the end of the file. `Writer` in `nq/mbo_file.hpp` produces these files.

@@ -15,13 +15,15 @@ public:
         : count_(p.RequireInt("count")),
           instruments_(p.GetInt("instruments", 1)),
           endless_(p.GetBool("endless", false)),
-          again_every_(p.GetInt("again_every", 0)) {
+          again_every_(p.GetInt("again_every", 0)),
+          fail_after_(p.GetInt("fail_after", 0)) {
         for (std::int64_t i = 0; i < instruments_; ++i) {
             table_.push_back(nq::Instrument{static_cast<std::uint32_t>(i + 1), "SYN" + std::to_string(i + 1), 10, 1});
         }
     }
 
     nq::Next Next(nq::Mbo& m) {
+        if (fail_after_ > 0 && next_ >= fail_after_) return nq::Next::Error;
         if (!endless_ && next_ >= count_) return nq::Next::End;
         if (again_every_ > 0 && ++calls_ % again_every_ == 0) return nq::Next::Again;
         const std::int64_t i = next_++;
@@ -47,6 +49,7 @@ private:
     std::int64_t instruments_;
     bool endless_;
     std::int64_t again_every_;
+    std::int64_t fail_after_;
     std::int64_t next_ = 0;
     std::int64_t calls_ = 0;
     std::vector<nq::Instrument> table_;

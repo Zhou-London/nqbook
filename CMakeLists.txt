@@ -23,7 +23,7 @@ FetchContent_Declare(nlib
 )
 FetchContent_Declare(nqcppsdk
     GIT_REPOSITORY https://github.com/Zhou-London/nqcppsdk.git
-    GIT_TAG v0.1.0
+    GIT_TAG v0.1.2
     GIT_SHALLOW ON
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shared/nqcppsdk
 )

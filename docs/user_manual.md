@@ -1,13 +1,12 @@
 # NQBook User Manual
 
-This manual is for people and automated harnesses that run the `nqbook` binary and write plugins for it with NQCPPSDK. It describes the command line, the file formats, and the plugin API.
+This manual is for people and automated harnesses that run the `nqbook` binary and write plugins for it with NQCPPSDK. It describes the command line, the output format, and the plugin API.
 
 ## 1. What you have
 
 | Item | What it is |
 |---|---|
 | `nqbook` | the executable. It builds order books from MBO data, runs feature plugins, and writes feature rows |
-| `plugins/adapters/replay.so` | an adapter plugin that replays an `.mbo` file |
 | `plugins/adapters/synthetic.so` | an adapter plugin that generates test events |
 | `plugins/features/example_features.so` | a feature plugin with spread, mid, and volume by side |
 | NQCPPSDK | header-only C++ headers under `nq/`, plus a CMake function, for writing your own plugins. Source: `https://github.com/Zhou-London/nqcppsdk` |
@@ -72,7 +71,7 @@ nqbook check --plugin plugins/features/example_features.so --format json
 ```json
 {
   "plugins": [
-    {"name": "example_features", "path": "...", "sdk_version": "0.1.0", "requires": "MBO", "ncol": 5, "params": {}}
+    {"name": "example_features", "path": "...", "sdk_version": "0.1.2", "requires": "MBO", "ncol": 5, "params": {}}
   ],
   "columns": [
     {"name": "example_features.spread", "unit": "price", "kind": "snapshot", "doc": "best ask minus best bid", "plugin": "example_features"}
@@ -86,9 +85,9 @@ nqbook check --plugin plugins/features/example_features.so --format json
 ### run
 
 ```bash
-nqbook run --adapter plugins/adapters/replay.so --adapter-param path=day.mbo \
+nqbook run --adapter plugins/adapters/synthetic.so --adapter-param count=100000 \
            --plugin-dir plugins/features \
-           --sampler 1s=time:1s --sampler 5s=time:5s --sampler t=trades:1 \
+           --sampler e=events:1000 --sampler t=trades:1 \
            --out-dir out
 ```
 
@@ -105,10 +104,10 @@ Ctrl-C or SIGTERM stops a run cleanly. The bars that have not closed yet are emi
 ### check-feed
 
 ```bash
-nqbook check-feed --adapter plugins/adapters/replay.so --adapter-param path=day.mbo
+nqbook check-feed --adapter plugins/adapters/synthetic.so --adapter-param count=100000
 ```
 
-`check-feed` validates an adapter or a data file. The report has one `feed` line for the whole market, one `book` line that sums all books, and one line per instrument:
+`check-feed` validates an adapter. The report has one `feed` line for the whole market, one `book` line that sums all books, and one line per instrument:
 
 ```
 feed  events=300000 instruments=5 ts_regressions=0 instrument_unknown=0 stalls=135282 first_ts=... last_ts=... adapter_status=0
@@ -159,14 +158,14 @@ min_qty=1
 
 An adapter reads a `.params` file in the same way as a plugin.
 
-Parameters of the bundled adapters:
+Parameters of `synthetic.so`:
 
-| Adapter | Parameter | Meaning |
-|---|---|---|
-| `replay.so` | `path` | the `.mbo` file to replay. Required |
-| `synthetic.so` | `count` | number of events to generate. Required |
-| `synthetic.so` | `instruments` | number of instruments. Default 1 |
-| `synthetic.so` | `endless` | `true` keeps generating until the run is stopped. Default `false` |
+| Parameter | Meaning |
+|---|---|
+| `count` | number of events to generate. Required |
+| `instruments` | number of instruments. Default 1 |
+| `endless` | `true` keeps generating until the run is stopped. Default `false` |
+| `fail_after` | ends the stream with an error after this many events. Default 0, never |
 
 ### Samplers
 
@@ -235,7 +234,7 @@ set(CMAKE_CXX_STANDARD 23)
 include(FetchContent)
 FetchContent_Declare(nqcppsdk
     GIT_REPOSITORY https://github.com/Zhou-London/nqcppsdk.git
-    GIT_TAG v0.1.0
+    GIT_TAG v0.1.2
     GIT_SHALLOW ON
 )
 FetchContent_MakeAvailable(nqcppsdk)
@@ -375,36 +374,43 @@ auto v = sb.Read();   // v[0] == 0.75, v[1] == 1
 
 ## 9. Writing an adapter plugin
 
+This adapter produces `count` add events for one instrument:
+
 ```cpp
+#include <cstdint>
+
 #include <nq/adapter.hpp>
 
-class Replay : public nq::AdapterBase {
+class Ticks : public nq::AdapterBase {
 public:
-    static constexpr const char* kName = "replay";
+    static constexpr const char* kName = "ticks";
 
-    explicit Replay(const nq::Params& p) : reader_(std::string(p.Require("path"))) {
-        for (const auto& r : reader_.Instruments())
-            table_.push_back(nq::Instrument{r.id, r.symbol, r.tick_size, r.lot_size});
-    }
+    explicit Ticks(const nq::Params& p) : count_(p.RequireInt("count")) {}
 
     nq::Next Next(nq::Mbo& out) {
-        nq_mbo raw;
-        const int rc = reader_.Next(raw);
-        if (rc == 1) { out = nq::Mbo(raw); return nq::Next::Event; }
-        return rc == 0 ? nq::Next::End : nq::Next::Error;
+        if (next_ >= count_) return nq::Next::End;
+        const std::int64_t i = next_++;
+        out.ts = i + 1;
+        out.id = static_cast<std::uint64_t>(i + 1);
+        out.instrument = 1;
+        out.side = i % 2 ? nq::Side::Ask : nq::Side::Bid;
+        out.action = nq::Action::Add;
+        out.price = 1000 + i;
+        out.qty = 1;
+        return nq::Next::Event;
     }
 
     const nq::Instrument* FindInstrument(std::uint32_t id) const noexcept {
-        for (const auto& i : table_) if (i.id == id) return &i;
-        return nullptr;
+        return id == 1 ? &instrument_ : nullptr;
     }
 
 private:
-    nq::mbo_file::Reader reader_;
-    std::vector<nq::Instrument> table_;
+    std::int64_t count_;
+    std::int64_t next_ = 0;
+    nq::Instrument instrument_{1, "DEMO", 10, 1};
 };
 
-NQ_ADAPTER(Replay)
+NQ_ADAPTER(Ticks)
 ```
 
 Build it with the same `nq_add_plugin` as a feature.
@@ -427,7 +433,7 @@ Return values of `Next`:
 
 An adapter is synchronous. `nqbook` calls `Next` and `FindInstrument` from one thread, never at the same time. `Next` must return within a bounded time. Return `Again` when no data is available, so a stop request can take effect.
 
-`nq::Mbo` has the fields `ts`, `id`, `price`, `qty`, `instrument`, `side`, and `action`.
+`nq::Mbo` has the fields `ts`, `id`, `price`, `qty`, `instrument`, `side`, and `action`. `nq::Instrument` has `id`, `symbol`, `tick_size`, and `lot_size`.
 
 ### The event stream contract
 
@@ -457,36 +463,13 @@ Example: the price 100.5 is stored as 1005000000000.
 #include <nq/adapter_testing.hpp>
 
 nq::ParamsBuilder pb;
-pb.Set("path", "fixture.mbo");
-nq::testing::AdapterSandbox<Replay> sb(pb.Build());
-auto events = sb.Drain();            // pulls until End or Error
+pb.Set("count", "5");
+nq::testing::AdapterSandbox<Ticks> sb(pb.Build());
+auto events = sb.Drain();            // pulls until End or Error; 5 events here
 sb.LastStatus();                     // nq::Next::End
 ```
 
-## 10. The .mbo file
-
-`replay.so` reads this format. `nq/mbo_file.hpp` has a `Writer` that produces it and a `Reader` that parses it. The file describes itself and needs no companion file.
-
-```
-header            16 bytes: "NQMBO\0\0\0", uint32 version = 1, uint32 instrument count
-instrument table  48 bytes each: uint32 id, char symbol[28], int64 tick_size, int64 lot_size
-events            40 bytes each, to the end of the file:
-                  int64 ts, uint64 id, int64 price, int64 qty, uint32 instrument, uint8 side, uint8 action
-```
-
-All integers are little-endian. `side` is 0 for bid and 1 for ask. `action` is 0 add, 1 cancel, 2 modify, 3 trade, 4 clear.
-
-To convert your own data, write a small program that uses `Writer`:
-
-```cpp
-#include <nq/mbo_file.hpp>
-
-nq::mbo_file::Writer w("day.mbo", {nq::mbo_file::Writer::MakeInstrument(1, "BTC-USD", 10, 1)});
-w.Write(nq_mbo{ts, id, price, qty, 1, NQ_BID, NQ_ADD});
-w.Close();
-```
-
-## 11. Checklist for a harness
+## 10. Checklist for a harness
 
 1. Build the plugin against the SDK tag that matches `nqbook`.
 2. `nqbook check --plugin build/x.so`: exit code 0 means the plugin loads and its constructor accepts the parameters. Parse stdout with `--format json` for the column list.
