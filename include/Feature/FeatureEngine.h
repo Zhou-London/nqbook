@@ -16,12 +16,13 @@
 #include <Feature/FeatureCatalog.h>
 #include <Feature/Sampler.h>
 #include <Orderbook.h>
+#include <Writer/RowSink.h>
 
 namespace nq {
 
 class FeatureEngine {
 public:
-    FeatureEngine(const Orderbook& book, const FeatureCatalog& catalog, Instrument spec);
+    FeatureEngine(const Orderbook& book, const FeatureCatalog& catalog, Instrument spec, RowSink* sink = nullptr);
 
     FeatureEngine(const FeatureEngine&) = delete;
     FeatureEngine& operator=(const FeatureEngine&) = delete;

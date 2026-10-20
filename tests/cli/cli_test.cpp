@@ -8,6 +8,9 @@
 #include <stdexcept>
 #include <string>
 
+#include <arrow/io/file.h>
+#include <parquet/arrow/reader.h>
+
 #include <Config.h>
 
 #include <nq/mbo_file.hpp>
@@ -40,6 +43,12 @@ static Result Run(const std::string& args, const fs::path& tmp) {
 }
 
 static bool Has(const std::string& s, const char* needle) { return s.find(needle) != std::string::npos; }
+
+static std::int64_t ParquetRows(const fs::path& path) {
+    auto file = arrow::io::ReadableFile::Open(path.string()).ValueOrDie();
+    auto reader = parquet::arrow::OpenFile(file, arrow::default_memory_pool()).ValueOrDie();
+    return reader->parquet_reader()->metadata()->num_rows();
+}
 
 static int TestParsing() {
     CHECK(nq::ParseDuration("1s") == 1'000'000'000);
@@ -175,7 +184,7 @@ static int TestRunCli(const fs::path& tmp) {
     const fs::path out = tmp / "out";
     const std::string adapter = "--adapter " + Quote(NQ_REPLAY_ADAPTER_PATH) + " --adapter-param path=" + Quote(fixture);
 
-    Result r = Run("run " + adapter + " --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --sampler 1s=time:1s --sampler t=trades:1 --out-dir " + Quote(out), tmp);
+    Result r = Run("run " + adapter + " --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --sampler 1s=time:1s --sampler t=trades:1 --out-format csv --out-dir " + Quote(out), tmp);
     CHECK(r.code == 0);
     CHECK(Has(r.err, "feed  events=7 instruments=2 ts_regressions=0 instrument_unknown=0"));
     CHECK(Has(r.err, "adapter_status=0"));
@@ -203,6 +212,16 @@ static int TestRunCli(const fs::path& tmp) {
         while (std::getline(in, line)) rows.push_back(line);
         CHECK(rows.size() == 1 && rows[0].rfind("1,AAA,500000001,", 0) == 0);
     }
+
+    const fs::path pq = tmp / "pq";
+    r = Run("run " + adapter + " --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --sampler 1s=time:1s --sampler t=trades:1 --row-group 2 --out-dir " + Quote(pq), tmp);
+    CHECK(r.code == 0);
+    CHECK(Has(r.err, "writer  rows=6 stalls=") && !Has(r.err, "error="));
+    CHECK(fs::exists(pq / "1s.parquet") && fs::exists(pq / "t.parquet") && fs::exists(pq / "instruments.parquet"));
+    CHECK(Has(r.err, "wrote ") && Has(r.err, "instruments.parquet"));
+    CHECK(ParquetRows(pq / "1s.parquet") == 5 && ParquetRows(pq / "t.parquet") == 1 && ParquetRows(pq / "instruments.parquet") == 2);
+    r = Run("run " + adapter + " --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --sampler 1s=time:1s --out-dir " + Quote(tmp / "plugins" / "notes.txt" / "x"), tmp);
+    CHECK(r.code == 8);
 
     r = Run("check-feed " + adapter, tmp);
     CHECK(r.code == 0 && Has(r.err, "feed  events=7 instruments=2") && Has(r.err, "trades=1"));

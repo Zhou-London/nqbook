@@ -6,8 +6,8 @@
 namespace nq {
 
 PipelineTable::PipelineTable(const FeatureCatalog& catalog, Resolver resolver, std::size_t expected_orders,
-                             std::size_t instrument_slots)
-    : catalog_(&catalog), resolver_(std::move(resolver)), expected_orders_(expected_orders) {
+                             std::size_t instrument_slots, RowSink* sink)
+    : catalog_(&catalog), resolver_(std::move(resolver)), expected_orders_(expected_orders), sink_(sink) {
     entries_.resize(instrument_slots);
     for (std::size_t i = 0; i < entries_.size(); ++i) entries_[i].id = static_cast<std::uint32_t>(i);
 }
@@ -27,7 +27,7 @@ PipelineTable::Entry& PipelineTable::Resolve(std::uint32_t instrument) {
         ++stats_.instrument_unknown;
         spec = Instrument{instrument, "#" + std::to_string(instrument), 1, 1};
     }
-    entry.pipeline = std::make_unique<Pipeline>(*catalog_, std::move(*spec), expected_orders_);
+    entry.pipeline = std::make_unique<Pipeline>(*catalog_, std::move(*spec), expected_orders_, sink_);
     live_.push_back(entry.pipeline.get());
     return entry;
 }
@@ -47,6 +47,15 @@ nlib::qty_t PipelineTable::Apply(const nq_mbo& m) {
 
     for (Pipeline* p : live_) p->Engine().Advance(m.ts);
     return e.pipeline->Apply(m);
+}
+
+std::vector<Instrument> PipelineTable::Instruments() const {
+    std::vector<Instrument> out;
+    out.reserve(live_.size());
+    for (const Entry& e : entries_) {
+        if (e.pipeline) out.push_back(e.pipeline->Engine().GetInstrument());
+    }
+    return out;
 }
 
 void PipelineTable::Close() {

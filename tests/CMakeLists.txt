@@ -21,5 +21,6 @@ nqbook_add_test(engine_test engine_test.cpp)
 nqbook_add_test(pipeline_table_test pipeline_table_test.cpp)
 nqbook_add_test(adapter_engine_test adapter_engine_test.cpp)
 nqbook_add_test(replay_test adapters/replay_test.cpp)
+nqbook_add_test(writer_test writer_test.cpp)
 
 add_subdirectory(cli)

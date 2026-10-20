@@ -4,7 +4,7 @@
 
 namespace nq {
 
-FeatureEngine::FeatureEngine(const Orderbook& book, const FeatureCatalog& catalog, Instrument spec)
+FeatureEngine::FeatureEngine(const Orderbook& book, const FeatureCatalog& catalog, Instrument spec, RowSink* sink)
     : view_(book), catalog_(&catalog), spec_(std::move(spec)) {
     instances_.reserve(catalog.PluginCount());
     for (std::size_t i = 0; i < catalog.PluginCount(); ++i) {
@@ -19,8 +19,10 @@ FeatureEngine::FeatureEngine(const Orderbook& book, const FeatureCatalog& catalo
         values_.resize(values_.size() + catalog.Plugin(i).Schema().ncol, 0.0);
         instances_.push_back(catalog.Plugin(i).Create(*pb.Build()));
     }
-    for (const auto& t : catalog.Samplers()) {
-        samplers_.push_back(std::make_unique<Sampler>(t.spec, t.names, t.columns));
+    for (std::size_t i = 0; i < catalog.Samplers().size(); ++i) {
+        const auto& t = catalog.Samplers()[i];
+        samplers_.push_back(std::make_unique<Sampler>(t.spec, t.names, t.columns, sink,
+                                                      static_cast<std::uint32_t>(i), spec_.id));
     }
 }
 

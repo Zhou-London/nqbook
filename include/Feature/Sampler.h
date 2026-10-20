@@ -12,6 +12,7 @@
 #include <Defaults.h>
 
 #include <Feature/RowBuffer.h>
+#include <Writer/RowSink.h>
 
 namespace nq {
 
@@ -51,7 +52,8 @@ struct SamplerColumn {
 
 class Sampler {
 public:
-    Sampler(SamplerSpec spec, std::vector<std::string> names, std::vector<SamplerColumn> columns);
+    Sampler(SamplerSpec spec, std::vector<std::string> names, std::vector<SamplerColumn> columns,
+            RowSink* sink = nullptr, std::uint32_t sampler_index = 0, std::uint32_t instrument = 0);
 
     const SamplerSpec& Spec() const noexcept { return spec_; }
     const RowBuffer& Rows() const noexcept { return rows_; }
@@ -103,6 +105,9 @@ private:
     RowBuffer rows_;
     std::vector<double> last_;
     std::vector<double> row_;
+    RowSink* sink_;
+    std::uint32_t sampler_index_;
+    std::uint32_t instrument_;
     std::int64_t next_ = 0;
     bool started_ = false;
     bool dirty_ = false;

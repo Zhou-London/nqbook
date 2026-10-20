@@ -34,6 +34,9 @@ FetchContent_Declare(cli11
 )
 FetchContent_MakeAvailable(nlib nqcppsdk cli11)
 
+find_package(Arrow REQUIRED CONFIG)
+find_package(Parquet REQUIRED CONFIG)
+
 add_library(nqbook_core STATIC
     src/Orderbook.cpp
     src/Config.cpp
@@ -46,11 +49,13 @@ add_library(nqbook_core STATIC
     src/Session.cpp
     src/Report.cpp
     src/Writer/CsvWriter.cpp
+    src/Writer/ParquetWriter.cpp
+    src/Writer/WriterEngine.cpp
 )
 target_include_directories(nqbook_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(nqbook_core PUBLIC nlib::nlib nqcppsdk::nqcppsdk ${CMAKE_DL_LIBS})
+target_link_libraries(nqbook_core PUBLIC nlib::nlib nqcppsdk::nqcppsdk Parquet::parquet_shared ${CMAKE_DL_LIBS})
 target_compile_options(nqbook_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_subdirectory(plugins)

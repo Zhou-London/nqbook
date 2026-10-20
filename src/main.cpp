@@ -1,6 +1,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstdio>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -15,6 +16,7 @@
 #include <Report.h>
 #include <Session.h>
 #include <Writer/CsvWriter.h>
+#include <Writer/ParquetWriter.h>
 
 namespace {
 
@@ -47,11 +49,23 @@ struct AdapterOptions {
     std::size_t queue_capacity = nq::defaults::kQueueCapacity;
 };
 
+struct OutputOptions {
+    std::string dir;
+    std::string format = "parquet";
+    std::int64_t row_group_rows = nq::defaults::kRowGroupRows;
+};
+
 void AddPluginOptions(CLI::App* cmd, PluginOptions& opt) {
     cmd->add_option("--plugin", opt.plugins, "Plugin .so to load, in order; repeatable")->check(CLI::ExistingFile);
     cmd->add_option("--plugin-dir", opt.plugin_dir, "Directory whose *.so are loaded in filename order")->check(CLI::ExistingDirectory);
     cmd->add_option("--sampler", opt.samplers, "NAME=TRIGGER:EVERY, e.g. 1s=time:1s, fast=events:100, t=trades:1; repeatable");
     cmd->add_flag("--fill-gaps", opt.fill_gaps, "Time samplers emit a row for every empty bar");
+}
+
+void AddOutputOptions(CLI::App* cmd, OutputOptions& opt) {
+    cmd->add_option("--out-dir", opt.dir, "Directory that receives one file per sampler plus instruments.parquet");
+    cmd->add_option("--out-format", opt.format, "Output format")->check(CLI::IsMember({"parquet", "csv"}));
+    cmd->add_option("--row-group", opt.row_group_rows, "Rows per Parquet row group")->check(CLI::PositiveNumber);
 }
 
 void AddAdapterOptions(CLI::App* cmd, AdapterOptions& opt) {
@@ -130,7 +144,7 @@ int Check(const PluginOptions& popt, const std::string& format) {
     return kOk;
 }
 
-int Run(const PluginOptions& popt, const AdapterOptions& aopt, const std::string& out_dir, bool feed_only) {
+int Run(const PluginOptions& popt, const AdapterOptions& aopt, const OutputOptions& oopt, bool feed_only) {
     nq::FeatureCatalog catalog;
     if (!feed_only) {
         if (int rc = LoadCatalog(popt, catalog)) return rc;
@@ -138,6 +152,15 @@ int Run(const PluginOptions& popt, const AdapterOptions& aopt, const std::string
 
     nq::ParamsBuilder pb;
     if (int rc = ParseAdapterParams(aopt, pb)) return rc;
+
+    const bool parquet = !feed_only && !oopt.dir.empty() && oopt.format == "parquet";
+    const bool csv = !feed_only && !oopt.dir.empty() && oopt.format == "csv";
+    std::unique_ptr<nq::ParquetWriter> writer;
+    if (parquet) {
+        if (int rc = Attempt(kOutputFailed, [&] {
+                writer = std::make_unique<nq::ParquetWriter>(catalog, oopt.dir, nq::ParquetOptions{oopt.row_group_rows});
+            })) return rc;
+    }
 
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
@@ -148,14 +171,21 @@ int Run(const PluginOptions& popt, const AdapterOptions& aopt, const std::string
     std::optional<nq::Session> session;
     nq::RunResult result;
     if (int rc = Attempt(kAdapterFailed, [&] {
-            session.emplace(catalog, *adapter, *pb.Build(), aopt.queue_capacity);
+            session.emplace(catalog, *adapter, *pb.Build(), std::move(writer), aopt.queue_capacity);
             result = session->Run(g_stop);
         })) return rc;
     nq::PrintFeedReport(stderr, session->Pipelines(), result);
 
-    if (!feed_only && !out_dir.empty()) {
+    if (parquet) {
+        if (!result.writer_error.empty()) {
+            std::fprintf(stderr, "nqbook: %s\n", result.writer_error.c_str());
+            return kOutputFailed;
+        }
+        for (const auto& p : session->Writer()->Writer().Files()) std::fprintf(stderr, "wrote %s\n", p.string().c_str());
+    }
+    if (csv) {
         if (int rc = Attempt(kOutputFailed, [&] {
-                for (const auto& p : nq::WriteSamplerCsv(session->Pipelines(), out_dir)) {
+                for (const auto& p : nq::WriteSamplerCsv(session->Pipelines(), oopt.dir)) {
                     std::fprintf(stderr, "wrote %s\n", p.string().c_str());
                 }
             })) return rc;
@@ -183,11 +213,11 @@ int main(int argc, char** argv) {
 
     PluginOptions run_plugins;
     AdapterOptions run_adapter;
-    std::string out_dir;
+    OutputOptions run_output;
     CLI::App* run = app.add_subcommand("run", "Consume an adapter's mbo stream through the book and plugins");
     AddAdapterOptions(run, run_adapter);
     AddPluginOptions(run, run_plugins);
-    run->add_option("--out-dir", out_dir, "Directory that receives one CSV per sampler when the run ends");
+    AddOutputOptions(run, run_output);
 
     AdapterOptions feed_adapter;
     CLI::App* feed = app.add_subcommand("check-feed", "Consume an adapter's mbo stream through bare books and report feed quality");
@@ -213,7 +243,7 @@ int main(int argc, char** argv) {
         }
     }
     if (check->parsed()) return Check(check_plugins, check_format);
-    if (run->parsed()) return Run(run_plugins, run_adapter, out_dir, false);
-    if (feed->parsed()) return Run(PluginOptions{}, feed_adapter, "", true);
+    if (run->parsed()) return Run(run_plugins, run_adapter, run_output, false);
+    if (feed->parsed()) return Run(PluginOptions{}, feed_adapter, OutputOptions{}, true);
     return kOk;
 }

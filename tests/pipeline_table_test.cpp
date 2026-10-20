@@ -89,7 +89,7 @@ static int TestSession() {
     nq::host::AdapterPlugin adapter(NQ_SYNTHETIC_ADAPTER_PATH);
     nq::ParamsBuilder pb;
     pb.Set("count", "1000").Set("instruments", "3");
-    nq::Session session(catalog, adapter, *pb.Build(), 8);
+    nq::Session session(catalog, adapter, *pb.Build(), nullptr, 8);
     std::atomic<bool> stop{false};
     const nq::RunResult r = session.Run(stop);
     CHECK(!r.interrupted && r.adapter_status == 0 && r.consumed == 1000);
@@ -103,7 +103,7 @@ static int TestSession() {
 
     nq::ParamsBuilder endless;
     endless.Set("count", "1").Set("endless", "true");
-    nq::Session forever(catalog, adapter, *endless.Build(), 8);
+    nq::Session forever(catalog, adapter, *endless.Build(), nullptr, 8);
     std::atomic<bool> stop2{false};
     std::thread stopper([&] {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));

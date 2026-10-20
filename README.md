@@ -6,7 +6,7 @@ Data sources and feature computations are plugins. NQBook loads them with `dlope
 
 ## Build
 
-Requires CMake 3.28+, a C++23 compiler (Apple clang 21 or GCC 14 and later), and GitHub access on the first configure to fetch nlib, nqcppsdk, and CLI11.
+Requires CMake 3.28+, a C++23 compiler (Apple clang 21 or GCC 14 and later), Apache Arrow with Parquet installed where CMake can find it (`brew install apache-arrow` on macOS, `libarrow-dev` and `libparquet-dev` on Debian and Ubuntu), and GitHub access on the first configure to fetch nlib, nqcppsdk, and CLI11.
 
 ```bash
 cmake -S . -B build
@@ -62,7 +62,13 @@ nqbook run --adapter build/plugins/adapters/replay.so --adapter-param path=day.m
            --out-dir out
 ```
 
-`run` starts the adapter thread, consumes events from the queue on the main thread, prints the feed report to stderr at the end, then writes one `<sampler>.csv` per sampler under `--out-dir`. Without `--out-dir` it prints only the report.
+`run` starts the adapter thread and, when `--out-dir` is given, the writer thread. The main thread consumes events from the adapter queue, and every sampled row goes through a second queue to the writer, which appends it to `<sampler>.parquet` as the run proceeds. At the end `run` prints the feed report to stderr, writes `instruments.parquet`, and closes the files. Without `--out-dir` it prints only the report.
+
+| Option | Meaning |
+|---|---|
+| `--out-dir DIR` | directory that receives one file per sampler plus `instruments.parquet` |
+| `--out-format parquet\|csv` | `parquet` streams rows to disk during the run; `csv` keeps rows in memory and writes `<sampler>.csv` at the end. Default `parquet` |
+| `--row-group N` | rows per Parquet row group, default 65536 |
 
 Ctrl-C or SIGTERM stops a run cleanly: the adapter thread exits, open bars are emitted, the CSV files are written, and the exit code is 130.
 
@@ -86,6 +92,7 @@ book  adds=165323 cancels=104686 modifies=8865 trades=21126 clears=0 | add_dupli
 | `instrument_unknown` | instruments the adapter could not describe; should be 0 |
 | `stalls` | times the adapter waited on a full queue; measures consumer speed only |
 | `adapter_status` | adapter end status, 0 on success, negative on error |
+| `writer rows=… stalls=…` | rows the writer thread stored and times the main thread waited on a full writer queue; printed only with Parquet output |
 | `add_duplicate` | adds for an order id that already rests in the book |
 | `cancel_unknown` `modify_unknown` `trade_unknown` | operations on an order id the book does not hold |
 | `trade_over_order` | trade quantity above the resting quantity of the traded order |
@@ -134,14 +141,19 @@ Time sampler rules: a bar carries its close time as `ts`; the first partial bar 
 
 ## Output
 
-One CSV per sampler:
+One Parquet file per sampler, ZSTD compressed, with the Arrow schema stored in the file:
 
-```
-instrument,symbol,ts,example_features.spread,example_features.mid,example_features.buy_vol,...
-1,SYM1,2000000000,0.2,100.6,644,643,1287
-```
+| Column | Type |
+|---|---|
+| `instrument` | `uint32`, the id the adapter assigned |
+| `ts` | `timestamp[ns, tz=UTC]` |
+| one column per feature column | `float64`, named `plugin.column` |
 
-`instrument` is the id the adapter assigned and is meaningful only within one run; align runs by `symbol`. `ts` is UTC nanoseconds. Snapshot columns hold the value at the sampling instant. Cumulative columns hold the increase since the previous row, so the 1-second rows sum to the 5-second rows.
+`instruments.parquet` maps `instrument` to `symbol`, `tick_size`, and `lot_size`. The id is meaningful only within one run; align runs by `symbol`.
+
+Snapshot columns hold the value at the sampling instant. Cumulative columns hold the increase since the previous row, so the 1-second rows sum to the 5-second rows.
+
+With `--out-format csv` each sampler becomes `<sampler>.csv` with the columns `instrument,symbol,ts,...` and `ts` in UTC nanoseconds.
 
 ## Exit codes
 
@@ -154,7 +166,7 @@ instrument,symbol,ts,example_features.spread,example_features.mid,example_featur
 | 5 | sampler definition is invalid or duplicated |
 | 6 | a `.params` file or `--adapter-param` is malformed |
 | 7 | the adapter ended with an error status |
-| 8 | writing the output failed |
+| 8 | opening or writing the output failed |
 | 130 | interrupted by SIGINT or SIGTERM |
 | 100 and above | command-line usage error |
 

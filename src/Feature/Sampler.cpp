@@ -4,12 +4,16 @@
 
 namespace nq {
 
-Sampler::Sampler(SamplerSpec spec, std::vector<std::string> names, std::vector<SamplerColumn> columns)
+Sampler::Sampler(SamplerSpec spec, std::vector<std::string> names, std::vector<SamplerColumn> columns,
+                 RowSink* sink, std::uint32_t sampler_index, std::uint32_t instrument)
     : spec_(std::move(spec)),
       columns_(std::move(columns)),
       rows_(std::move(names)),
       last_(columns_.size(), 0.0),
-      row_(columns_.size(), 0.0) {}
+      row_(columns_.size(), 0.0),
+      sink_(sink),
+      sampler_index_(sampler_index),
+      instrument_(instrument) {}
 
 bool Sampler::OnEvent(std::int64_t ts, std::uint8_t a) noexcept {
     last_ts_ = ts;
@@ -37,7 +41,8 @@ void Sampler::Emit(std::int64_t ts, std::span<const double> values) {
             row_[i] = v;
         }
     }
-    rows_.Push(ts, row_);
+    if (sink_) sink_->Push(FeatureRow{sampler_index_, instrument_, ts, row_});
+    else rows_.Push(ts, row_);
     dirty_ = false;
 }
 

@@ -14,8 +14,9 @@ namespace nq {
 
 class Pipeline {
 public:
-    Pipeline(const FeatureCatalog& catalog, Instrument spec, std::size_t expected_orders = defaults::kExpectedOrders)
-        : book_(expected_orders), engine_(book_, catalog, std::move(spec)) {}
+    Pipeline(const FeatureCatalog& catalog, Instrument spec, std::size_t expected_orders = defaults::kExpectedOrders,
+             RowSink* sink = nullptr)
+        : book_(expected_orders), engine_(book_, catalog, std::move(spec), sink) {}
 
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;

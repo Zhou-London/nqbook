@@ -113,6 +113,12 @@ void PrintFeedReport(std::FILE* out, const PipelineTable& table, const RunResult
                  static_cast<unsigned long long>(result.stalls), static_cast<long long>(f.first_ts),
                  static_cast<long long>(f.last_ts), result.adapter_status, result.interrupted ? " interrupted" : "");
 
+    if (result.has_writer) {
+        std::fprintf(out, "writer  rows=%llu stalls=%llu%s%s\n", static_cast<unsigned long long>(result.rows_written),
+                     static_cast<unsigned long long>(result.writer_stalls),
+                     result.writer_error.empty() ? "" : " error=", result.writer_error.c_str());
+    }
+
     Orderbook::Stats total;
     for (const auto& e : table.Entries()) {
         if (!e.pipeline) continue;

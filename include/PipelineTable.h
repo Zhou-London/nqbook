@@ -44,7 +44,9 @@ public:
 
     PipelineTable(const FeatureCatalog& catalog, Resolver resolver,
                   std::size_t expected_orders = defaults::kExpectedOrders,
-                  std::size_t instrument_slots = defaults::kInstrumentSlots);
+                  std::size_t instrument_slots = defaults::kInstrumentSlots, RowSink* sink = nullptr);
+
+    std::vector<Instrument> Instruments() const;
 
     PipelineTable(const PipelineTable&) = delete;
     PipelineTable& operator=(const PipelineTable&) = delete;
@@ -67,6 +69,7 @@ private:
     const FeatureCatalog* catalog_;
     Resolver resolver_;
     std::size_t expected_orders_;
+    RowSink* sink_;
     std::vector<Entry> entries_;
     std::vector<Pipeline*> live_;
     FeedStats stats_;
