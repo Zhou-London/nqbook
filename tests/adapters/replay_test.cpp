@@ -1,4 +1,3 @@
-#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -6,26 +5,24 @@
 #include <vector>
 
 #include <nq/adapter_host.hpp>
-#include <nq/adapter_testing.hpp>
+#include <nq/params.hpp>
 
-#include "../../adapters/replay/mbo_file.hpp"
+#include "support.hpp"
+
+using nqtest::Mbo;
+
+#include <nq/mbo_file.hpp>
 
 namespace fs = std::filesystem;
 
-#define CHECK(x) do { if (!(x)) { std::printf("FAIL line %d: %s\n", __LINE__, #x); return 1; } } while (0)
-
-static nq_mbo Event(std::int64_t ts, std::uint64_t id, std::uint32_t instrument, std::uint8_t side,
-                    std::uint8_t action, std::int64_t price, std::int64_t qty) {
-    return nq_mbo{ts, id, price, qty, instrument, side, action};
-}
 
 static std::vector<nq_mbo> Fixture() {
     return {
-        Event(100, 1, 1, NQ_BID, NQ_ADD, 1000, 5),
-        Event(101, 2, 2, NQ_ASK, NQ_ADD, 2000, 7),
-        Event(102, 1, 1, NQ_BID, NQ_TRADE, 1000, 2),
-        Event(103, 2, 2, NQ_ASK, NQ_CANCEL, 0, 0),
-        Event(104, 0, 1, NQ_BID, NQ_CLEAR, 0, 0),
+        Mbo(NQ_ADD, 100, 1, 1, NQ_BID, 1000, 5),
+        Mbo(NQ_ADD, 101, 2, 2, NQ_ASK, 2000, 7),
+        Mbo(NQ_TRADE, 102, 1, 1, NQ_BID, 1000, 2),
+        Mbo(NQ_CANCEL, 103, 2, 2, NQ_ASK, 0, 0),
+        Mbo(NQ_CLEAR, 104, 1, 0, NQ_BID, 0, 0),
     };
 }
 
@@ -51,37 +48,51 @@ static int TestRoundTrip(const fs::path& path) {
     return 0;
 }
 
+static std::vector<nq_mbo> Pull(nq::host::AdapterInstance& inst, int& status) {
+    std::vector<nq_mbo> out;
+    nq_mbo m;
+    for (;;) {
+        const int rc = inst.Next(m);
+        if (rc == NQ_NEXT_EVENT) {
+            out.push_back(m);
+            continue;
+        }
+        if (rc == NQ_NEXT_AGAIN) continue;
+        status = rc;
+        return out;
+    }
+}
+
 static int TestReplayPlugin(const fs::path& path, const fs::path& tmp) {
     nq::host::AdapterPlugin plugin(NQ_REPLAY_ADAPTER_PATH);
     CHECK(std::strcmp(plugin.Schema().name, "replay") == 0);
     CHECK(plugin.Schema().provides == NQ_REQUIRES_MBO);
 
-    nq::testing::MockSink sink;
     nq::ParamsBuilder pb;
     pb.Set("path", path.string());
-    {
-        nq::host::AdapterInstance inst = plugin.Create(*pb.Build(), *sink.Raw());
-        CHECK(std::strcmp(inst.Instrument(1)->symbol, "AAA") == 0 && inst.Instrument(1)->tick_size == 10);
-        CHECK(std::strcmp(inst.Instrument(2)->symbol, "BBB-USD") == 0);
-        CHECK(!inst.Instrument(3));
-        inst.Start();
-        CHECK(sink.WaitEnd());
-    }
-    CHECK(sink.Status() == 0);
-    const auto got = sink.Events();
+    nq::host::AdapterInstance inst = plugin.Create(*pb.Build());
+    CHECK(std::strcmp(inst.Instrument(1)->symbol, "AAA") == 0 && inst.Instrument(1)->tick_size == 10);
+    CHECK(std::strcmp(inst.Instrument(2)->symbol, "BBB-USD") == 0);
+    CHECK(!inst.Instrument(3));
+
+    int status = 0;
+    const auto got = Pull(inst, status);
+    CHECK(status == NQ_NEXT_END);
     const auto expected = Fixture();
     CHECK(got.size() == expected.size());
     for (std::size_t i = 0; i < got.size(); ++i) CHECK(std::memcmp(&got[i], &expected[i], sizeof(nq_mbo)) == 0);
+    nq_mbo again;
+    CHECK(inst.Next(again) == NQ_NEXT_END);
 
     bool threw = false;
     nq::ParamsBuilder missing;
     missing.Set("path", (tmp / "nope.mbo").string());
-    try { plugin.Create(*missing.Build(), *sink.Raw()); } catch (const nq::host::PluginInitError&) { threw = true; }
+    try { plugin.Create(*missing.Build()); } catch (const nq::host::PluginInitError&) { threw = true; }
     CHECK(threw);
 
     threw = false;
     nq::ParamsBuilder nopath;
-    try { plugin.Create(*nopath.Build(), *sink.Raw()); } catch (const nq::host::PluginInitError&) { threw = true; }
+    try { plugin.Create(*nopath.Build()); } catch (const nq::host::PluginInitError&) { threw = true; }
     CHECK(threw);
 
     const fs::path junk = tmp / "junk.mbo";
@@ -89,7 +100,7 @@ static int TestReplayPlugin(const fs::path& path, const fs::path& tmp) {
     threw = false;
     nq::ParamsBuilder bad;
     bad.Set("path", junk.string());
-    try { plugin.Create(*bad.Build(), *sink.Raw()); } catch (const nq::host::PluginInitError&) { threw = true; }
+    try { plugin.Create(*bad.Build()); } catch (const nq::host::PluginInitError&) { threw = true; }
     CHECK(threw);
 
     const fs::path truncated = tmp / "truncated.mbo";
@@ -99,15 +110,12 @@ static int TestReplayPlugin(const fs::path& path, const fs::path& tmp) {
         std::ofstream out(truncated, std::ios::binary);
         out.write(bytes.data(), static_cast<std::streamsize>(bytes.size() - 7));
     }
-    nq::testing::MockSink sink2;
     nq::ParamsBuilder tp;
     tp.Set("path", truncated.string());
-    {
-        nq::host::AdapterInstance inst = plugin.Create(*tp.Build(), *sink2.Raw());
-        inst.Start();
-        CHECK(sink2.WaitEnd());
-    }
-    CHECK(sink2.Status() == 2 && sink2.Count() == expected.size() - 1);
+    nq::host::AdapterInstance t = plugin.Create(*tp.Build());
+    const auto partial = Pull(t, status);
+    CHECK(status == NQ_NEXT_ERROR && partial.size() == expected.size() - 1);
+    CHECK(t.Next(again) == NQ_NEXT_ERROR);
     return 0;
 }
 

@@ -4,8 +4,8 @@
 
 namespace nq {
 
-PipelineTable::PipelineTable(const FeatureCatalog& plugins, Resolver resolver, std::size_t expected_orders)
-    : plugins_(&plugins), resolver_(std::move(resolver)), expected_orders_(expected_orders) {}
+PipelineTable::PipelineTable(const FeatureCatalog& catalog, Resolver resolver, std::size_t expected_orders)
+    : catalog_(&catalog), resolver_(std::move(resolver)), expected_orders_(expected_orders) {}
 
 PipelineTable::Entry& PipelineTable::Resolve(std::uint32_t instrument) {
     auto it = entries_.find(instrument);
@@ -18,11 +18,11 @@ PipelineTable::Entry& PipelineTable::Resolve(std::uint32_t instrument) {
         ++stats_.instrument_unknown;
         spec = Instrument{instrument, "#" + std::to_string(instrument), 1, 1};
     }
-    entry.pipeline = std::make_unique<Pipeline>(*plugins_, std::move(*spec), expected_orders_);
+    entry.pipeline = std::make_unique<Pipeline>(*catalog_, std::move(*spec), expected_orders_);
     return entries_.emplace(instrument, std::move(entry)).first->second;
 }
 
-nlib::qty_t PipelineTable::Apply(const nlib::mbo& m) {
+nlib::qty_t PipelineTable::Apply(const nq_mbo& m) {
     Entry& e = Resolve(m.instrument);
 
     if (stats_.events == 0) stats_.first_ts = m.ts;

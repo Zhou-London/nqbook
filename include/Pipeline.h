@@ -5,6 +5,7 @@
 
 #include <nlib/common.h>
 
+#include <Defaults.h>
 #include <Feature/FeatureEngine.h>
 #include <Feature/FeatureCatalog.h>
 #include <Orderbook.h>
@@ -13,8 +14,8 @@ namespace nq {
 
 class Pipeline {
 public:
-    Pipeline(const FeatureCatalog& plugins, Instrument spec, std::size_t expected_orders = 1 << 16)
-        : book_(expected_orders), engine_(book_, plugins, std::move(spec)) {}
+    Pipeline(const FeatureCatalog& catalog, Instrument spec, std::size_t expected_orders = defaults::kExpectedOrders)
+        : book_(expected_orders), engine_(book_, catalog, std::move(spec)) {}
 
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;
@@ -24,7 +25,7 @@ public:
     FeatureEngine& Engine() noexcept { return engine_; }
     const FeatureEngine& Engine() const noexcept { return engine_; }
 
-    nlib::qty_t Apply(const nlib::mbo& m) {
+    nlib::qty_t Apply(const nq_mbo& m) {
         const nlib::qty_t filled = book_.Apply(m);
         engine_.OnEvent(m, filled);
         return filled;

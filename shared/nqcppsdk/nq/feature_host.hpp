@@ -8,33 +8,14 @@
 #include <string>
 #include <utility>
 
-#include <nq/abi.h>
+#include <nq/feature_abi.h>
+#include <nq/plugin_error.hpp>
 
 #ifndef NQ_ABI_HASH
 #error "NQ_ABI_HASH is not defined: link the target against nqcppsdk::nqcppsdk"
 #endif
 
 namespace nq::host {
-
-class PluginError : public std::runtime_error {
-public:
-    using std::runtime_error::runtime_error;
-};
-
-class PluginLoadError : public PluginError {
-public:
-    using PluginError::PluginError;
-};
-
-class AbiMismatchError : public PluginError {
-public:
-    using PluginError::PluginError;
-};
-
-class PluginInitError : public PluginError {
-public:
-    using PluginError::PluginError;
-};
 
 struct PluginFns {
     nq_describe_fn describe = nullptr;

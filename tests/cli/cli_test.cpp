@@ -10,11 +10,12 @@
 
 #include <Config.h>
 
-#include "../../adapters/replay/mbo_file.hpp"
+#include <nq/mbo_file.hpp>
+
+#include "support.hpp"
 
 namespace fs = std::filesystem;
 
-#define CHECK(x) do { if (!(x)) { std::printf("FAIL line %d: %s\n", __LINE__, #x); return 1; } } while (0)
 
 static std::string Quote(const fs::path& p) { return "'" + p.string() + "'"; }
 
@@ -68,8 +69,8 @@ static int TestParsing() {
 static int TestFiles(const fs::path& tmp) {
     const fs::path dir = tmp / "plugins";
     fs::create_directories(dir);
-    fs::copy_file(NQ_TEST_PLUGIN_PATH, dir / "b_test.so", fs::copy_options::overwrite_existing);
-    fs::copy_file(NQ_TEST_PLUGIN_PATH, dir / "a_test.so", fs::copy_options::overwrite_existing);
+    fs::copy_file(NQ_EXAMPLE_FEATURES_PATH, dir / "b_test.so", fs::copy_options::overwrite_existing);
+    fs::copy_file(NQ_EXAMPLE_FEATURES_PATH, dir / "a_test.so", fs::copy_options::overwrite_existing);
     {
         std::ofstream p(dir / "a_test.params");
         p << "# comment\n\n  min_qty = 5 \nlabel=x=y\n";
@@ -124,9 +125,9 @@ static int TestCli(const fs::path& tmp) {
     CHECK(Has(r.out, "1s               time every=1000000000ns fill_gaps=yes cols=10"));
     CHECK(Has(r.out, "t                trades every=1 fill_gaps=no cols=10"));
 
-    r = Run(base + "--plugin " + Quote(NQ_TEST_PLUGIN_PATH) + " --format json", tmp);
+    r = Run(base + "--plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --format json", tmp);
     CHECK(r.code == 0);
-    CHECK(Has(r.out, "\"name\": \"nq_test_plugin\"") && Has(r.out, "\"kind\": \"cumulative\"") && Has(r.out, "\"samplers\": [\n  ]"));
+    CHECK(Has(r.out, "\"name\": \"example_features\"") && Has(r.out, "\"kind\": \"cumulative\"") && Has(r.out, "\"samplers\": [\n  ]"));
 
     r = Run(base + "--plugin " + Quote(NQ_FAKE_PLUGIN_PATH), tmp);
     CHECK(r.code == 3 && Has(r.err, "abi hash mismatch"));
@@ -174,7 +175,7 @@ static int TestRunCli(const fs::path& tmp) {
     const fs::path out = tmp / "out";
     const std::string adapter = "--adapter " + Quote(NQ_REPLAY_ADAPTER_PATH) + " --adapter-param path=" + Quote(fixture);
 
-    Result r = Run("run " + adapter + " --plugin " + Quote(NQ_TEST_PLUGIN_PATH) + " --sampler 1s=time:1s --sampler t=trades:1 --out-dir " + Quote(out), tmp);
+    Result r = Run("run " + adapter + " --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --sampler 1s=time:1s --sampler t=trades:1 --out-dir " + Quote(out), tmp);
     CHECK(r.code == 0);
     CHECK(Has(r.err, "feed  events=7 instruments=2 ts_regressions=0 instrument_unknown=0"));
     CHECK(Has(r.err, "adapter_status=0"));
@@ -184,7 +185,7 @@ static int TestRunCli(const fs::path& tmp) {
         std::ifstream in(out / "1s.csv");
         std::string header, line;
         std::getline(in, header);
-        CHECK(header == "instrument,symbol,ts,nq_test_plugin.spread,nq_test_plugin.mid,nq_test_plugin.buy_vol,nq_test_plugin.sell_vol,nq_test_plugin.trades");
+        CHECK(header == "instrument,symbol,ts,example_features.spread,example_features.mid,example_features.buy_vol,example_features.sell_vol,example_features.trades");
         std::vector<std::string> rows;
         while (std::getline(in, line)) rows.push_back(line);
         CHECK(rows.size() == 5);
@@ -217,7 +218,7 @@ static int TestRunCli(const fs::path& tmp) {
     CHECK(r.code == 4 && Has(r.err, "nq_adapter_init failed"));
     r = Run("check-feed " + adapter + " --adapter-param novalue", tmp);
     CHECK(r.code == 6);
-    r = Run("check-feed --adapter " + Quote(NQ_TEST_PLUGIN_PATH), tmp);
+    r = Run("check-feed --adapter " + Quote(NQ_EXAMPLE_FEATURES_PATH), tmp);
     CHECK(r.code == 2 && Has(r.err, "missing symbol"));
 
     const fs::path truncated = tmp / "truncated.mbo";
@@ -228,7 +229,7 @@ static int TestRunCli(const fs::path& tmp) {
         o.write(bytes.data(), static_cast<std::streamsize>(bytes.size() - 3));
     }
     r = Run("check-feed --adapter " + Quote(NQ_REPLAY_ADAPTER_PATH) + " --adapter-param path=" + Quote(truncated), tmp);
-    CHECK(r.code == 7 && Has(r.err, "events=6") && Has(r.err, "adapter ended with status 2"));
+    CHECK(r.code == 7 && Has(r.err, "events=6") && Has(r.err, "adapter ended with status -2"));
     return 0;
 }
 

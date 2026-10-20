@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <optional>
 
-#include <nq/abi.h>
-#include <nq/event.hpp>
+#include <nq/feature_abi.h>
+#include <nq/types.hpp>
 
 namespace nq {
 

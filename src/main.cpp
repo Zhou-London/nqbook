@@ -1,6 +1,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstdio>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -9,9 +10,11 @@
 #include <nq/params.hpp>
 
 #include <Config.h>
+#include <Defaults.h>
 #include <Feature/FeatureCatalog.h>
 #include <Report.h>
 #include <Session.h>
+#include <Writer/CsvWriter.h>
 
 namespace {
 
@@ -41,7 +44,7 @@ struct PluginOptions {
 struct AdapterOptions {
     std::string adapter;
     std::vector<std::string> params;
-    std::size_t queue_capacity = 1 << 16;
+    std::size_t queue_capacity = nq::defaults::kQueueCapacity;
 };
 
 void AddPluginOptions(CLI::App* cmd, PluginOptions& opt) {
@@ -57,55 +60,55 @@ void AddAdapterOptions(CLI::App* cmd, AdapterOptions& opt) {
     cmd->add_option("--queue-capacity", opt.queue_capacity, "Adapter-to-book queue capacity, rounded up to a power of two")->check(CLI::PositiveNumber);
 }
 
-int Fail(int code, const std::exception& e) {
-    std::fprintf(stderr, "nqbook: %s\n", e.what());
-    return code;
+int ExitCodeFor(const std::exception& e, int fallback) {
+    if (dynamic_cast<const nq::host::AbiMismatchError*>(&e)) return kAbiMismatch;
+    if (dynamic_cast<const nq::host::PluginInitError*>(&e)) return kPluginInit;
+    if (dynamic_cast<const nq::host::PluginLoadError*>(&e)) return kPluginLoad;
+    if (dynamic_cast<const nq::host::PluginError*>(&e)) return kAdapterFailed;
+    return fallback;
 }
 
-int LoadCatalog(const PluginOptions& opt, nq::FeatureCatalog& set) {
-    std::vector<nq::SamplerSpec> specs;
+template <typename Step>
+int Attempt(int fallback, Step&& step) {
     try {
-        for (const auto& s : opt.samplers) {
-            nq::SamplerSpec spec = nq::ParseSamplerSpec(s);
-            spec.fill_gaps = opt.fill_gaps && spec.trigger == nq::Trigger::Time;
-            specs.push_back(std::move(spec));
-        }
-    } catch (const std::invalid_argument& e) {
-        return Fail(kSamplerInvalid, e);
+        step();
+        return kOk;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "nqbook: %s\n", e.what());
+        return ExitCodeFor(e, fallback);
     }
+}
+
+int LoadCatalog(const PluginOptions& opt, nq::FeatureCatalog& catalog) {
+    std::vector<nq::SamplerSpec> specs;
+    if (int rc = Attempt(kSamplerInvalid, [&] {
+            for (const auto& s : opt.samplers) {
+                nq::SamplerSpec spec = nq::ParseSamplerSpec(s);
+                spec.fill_gaps = opt.fill_gaps && spec.trigger == nq::Trigger::Time;
+                specs.push_back(std::move(spec));
+            }
+        })) return rc;
 
     std::vector<nq::PluginFile> files;
-    try {
-        for (const auto& p : opt.plugins) files.push_back(nq::DescribePluginFile(p));
-        if (!opt.plugin_dir.empty()) {
-            for (auto& f : nq::ScanPluginDir(opt.plugin_dir)) files.push_back(std::move(f));
-        }
-    } catch (const std::invalid_argument& e) {
-        return Fail(kParamsInvalid, e);
-    }
+    if (int rc = Attempt(kParamsInvalid, [&] {
+            for (const auto& p : opt.plugins) files.push_back(nq::DescribePluginFile(p));
+            if (!opt.plugin_dir.empty()) {
+                for (auto& f : nq::ScanPluginDir(opt.plugin_dir)) files.push_back(std::move(f));
+            }
+        })) return rc;
 
-    try {
-        for (auto& f : files) set.LoadPlugin(f.path.string(), f.name, std::move(f.params));
-    } catch (const nq::host::AbiMismatchError& e) {
-        return Fail(kAbiMismatch, e);
-    } catch (const nq::host::PluginInitError& e) {
-        return Fail(kPluginInit, e);
-    } catch (const nq::host::PluginLoadError& e) {
-        return Fail(kPluginLoad, e);
-    } catch (const std::invalid_argument& e) {
-        return Fail(kPluginLoad, e);
-    }
+    if (int rc = Attempt(kPluginLoad, [&] {
+            for (auto& f : files) catalog.LoadPlugin(f.path.string(), f.name, std::move(f.params));
+        })) return rc;
 
-    try {
-        for (auto& spec : specs) set.AddSampler(std::move(spec));
-    } catch (const std::invalid_argument& e) {
-        return Fail(kSamplerInvalid, e);
-    }
-    return kOk;
+    return Attempt(kSamplerInvalid, [&] {
+        for (auto& spec : specs) catalog.AddSampler(std::move(spec));
+    });
 }
 
 int ParseAdapterParams(const AdapterOptions& opt, nq::ParamsBuilder& pb) {
-    try {
+    pb.PriceScale(NQ_PRICE_SCALE).QtyScale(NQ_QTY_SCALE);
+    return Attempt(kParamsInvalid, [&] {
         nq::PluginFile f = nq::DescribePluginFile(opt.adapter);
         for (const auto& [k, v] : f.params) pb.Set(k, v);
         for (const auto& kv : opt.params) {
@@ -113,32 +116,24 @@ int ParseAdapterParams(const AdapterOptions& opt, nq::ParamsBuilder& pb) {
             if (eq == std::string::npos || eq == 0) throw std::invalid_argument("--adapter-param expects KEY=VALUE: '" + kv + "'");
             pb.Set(kv.substr(0, eq), kv.substr(eq + 1));
         }
-    } catch (const std::invalid_argument& e) {
-        return Fail(kParamsInvalid, e);
-    }
-    pb.PriceScale(nlib::price_scale).QtyScale(nlib::qty_scale);
-    return kOk;
+    });
 }
 
 int Check(const PluginOptions& popt, const std::string& format) {
-    nq::FeatureCatalog set;
-    if (int rc = LoadCatalog(popt, set)) return rc;
+    nq::FeatureCatalog catalog;
+    if (int rc = LoadCatalog(popt, catalog)) return rc;
 
-    try {
-        nq::Pipeline probe(set, nq::Instrument{0, "probe", 1, 1}, 16);
-    } catch (const nq::host::PluginInitError& e) {
-        return Fail(kPluginInit, e);
-    }
+    if (int rc = Attempt(kPluginInit, [&] { nq::Pipeline probe(catalog, nq::Instrument{0, "probe", 1, 1}, 16); })) return rc;
 
-    if (format == "json") nq::PrintCatalogJson(stdout, set);
-    else nq::PrintCatalogText(stdout, set);
+    if (format == "json") nq::PrintCatalogJson(stdout, catalog);
+    else nq::PrintCatalogText(stdout, catalog);
     return kOk;
 }
 
 int Run(const PluginOptions& popt, const AdapterOptions& aopt, const std::string& out_dir, bool feed_only) {
-    nq::FeatureCatalog set;
+    nq::FeatureCatalog catalog;
     if (!feed_only) {
-        if (int rc = LoadCatalog(popt, set)) return rc;
+        if (int rc = LoadCatalog(popt, catalog)) return rc;
     }
 
     nq::ParamsBuilder pb;
@@ -147,29 +142,23 @@ int Run(const PluginOptions& popt, const AdapterOptions& aopt, const std::string
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
 
+    std::optional<nq::host::AdapterPlugin> adapter;
+    if (int rc = Attempt(kPluginLoad, [&] { adapter.emplace(aopt.adapter); })) return rc;
+
+    std::optional<nq::Session> session;
     nq::RunResult result;
-    try {
-        nq::host::AdapterPlugin adapter(aopt.adapter);
-        nq::Session session(set, adapter, *pb.Build(), aopt.queue_capacity);
-        result = session.Run(g_stop);
-        nq::PrintFeedReport(stderr, session.Pipelines(), result);
-        if (!feed_only && !out_dir.empty()) {
-            try {
-                for (const auto& p : nq::WriteSamplerCsv(session.Pipelines(), out_dir)) {
+    if (int rc = Attempt(kAdapterFailed, [&] {
+            session.emplace(catalog, *adapter, *pb.Build(), aopt.queue_capacity);
+            result = session->Run(g_stop);
+        })) return rc;
+    nq::PrintFeedReport(stderr, session->Pipelines(), result);
+
+    if (!feed_only && !out_dir.empty()) {
+        if (int rc = Attempt(kOutputFailed, [&] {
+                for (const auto& p : nq::WriteSamplerCsv(session->Pipelines(), out_dir)) {
                     std::fprintf(stderr, "wrote %s\n", p.string().c_str());
                 }
-            } catch (const std::exception& e) {
-                return Fail(kOutputFailed, e);
-            }
-        }
-    } catch (const nq::host::AbiMismatchError& e) {
-        return Fail(kAbiMismatch, e);
-    } catch (const nq::host::PluginInitError& e) {
-        return Fail(kPluginInit, e);
-    } catch (const nq::host::PluginLoadError& e) {
-        return Fail(kPluginLoad, e);
-    } catch (const nq::host::PluginError& e) {
-        return Fail(kAdapterFailed, e);
+            })) return rc;
     }
 
     if (result.interrupted) return kInterrupted;

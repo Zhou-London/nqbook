@@ -1,13 +1,10 @@
-#pragma once
-
-#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <span>
 
-#include <nq/nqcppsdk.hpp>
+#include <nq/feature.hpp>
 
-namespace nq_test {
+namespace nq_example {
 
 struct Spread : nq::FeatureBase {
     static constexpr auto kColumns = nq::MakeColumns({
@@ -73,4 +70,6 @@ private:
     std::int64_t trades_ = 0;
 };
 
-}  // namespace nq_test
+}  // namespace nq_example
+
+NQ_PLUGIN(nq_example::Spread, nq_example::TradeVolume)

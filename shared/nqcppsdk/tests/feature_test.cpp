@@ -4,8 +4,8 @@
 #include <string>
 #include <vector>
 
-#include <nq/host.hpp>
-#include <nq/testing.hpp>
+#include <nq/feature_host.hpp>
+#include <nq/feature_testing.hpp>
 
 #include "test_features.hpp"
 
@@ -13,7 +13,7 @@ using nq::Side;
 using nq::testing::Add;
 using nq::testing::Trade;
 
-#define CHECK(x) do { if (!(x)) { std::printf("FAIL line %d: %s\n", __LINE__, #x); return 1; } } while (0)
+#include "check.hpp"
 
 static bool Near(double a, double b) { return std::fabs(a - b) < 1e-9; }
 

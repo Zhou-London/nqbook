@@ -1,7 +1,5 @@
 #include <Report.h>
 
-#include <memory>
-#include <stdexcept>
 #include <string_view>
 
 namespace nq {
@@ -43,36 +41,25 @@ std::string JsonString(std::string_view s) {
     return out;
 }
 
-std::string CsvString(std::string_view s) {
-    if (s.find_first_of(",\"\n") == std::string_view::npos) return std::string(s);
-    std::string out = "\"";
-    for (const char c : s) {
-        if (c == '"') out += '"';
-        out += c;
-    }
-    out += '"';
-    return out;
-}
-
 }  // namespace
 
-void PrintCatalogText(std::FILE* out, const FeatureCatalog& plugins) {
-    std::fprintf(out, "plugins (%zu)\n", plugins.PluginCount());
-    for (std::size_t i = 0; i < plugins.PluginCount(); ++i) {
-        const auto& p = plugins.Plugin(i);
-        std::fprintf(out, "  %-16s %s  sdk=%s requires=%s cols=%u", plugins.PluginName(i).c_str(), p.Path().c_str(),
+void PrintCatalogText(std::FILE* out, const FeatureCatalog& catalog) {
+    std::fprintf(out, "plugins (%zu)\n", catalog.PluginCount());
+    for (std::size_t i = 0; i < catalog.PluginCount(); ++i) {
+        const auto& p = catalog.Plugin(i);
+        std::fprintf(out, "  %-16s %s  sdk=%s requires=%s cols=%u", catalog.PluginName(i).c_str(), p.Path().c_str(),
                      p.Schema().sdk_version, RequiresName(p.Schema().requirement), p.Schema().ncol);
-        for (const auto& [k, v] : plugins.PluginParams(i)) std::fprintf(out, "  %s=%s", k.c_str(), v.c_str());
+        for (const auto& [k, v] : catalog.PluginParams(i)) std::fprintf(out, "  %s=%s", k.c_str(), v.c_str());
         std::fprintf(out, "\n");
     }
 
-    std::fprintf(out, "columns (%zu)\n", plugins.Columns().size());
-    for (const auto& c : plugins.Columns()) {
+    std::fprintf(out, "columns (%zu)\n", catalog.Columns().size());
+    for (const auto& c : catalog.Columns()) {
         std::fprintf(out, "  %-32s %-10s %-10s %s\n", c.name.c_str(), c.unit.c_str(), KindName(c.kind), c.doc.c_str());
     }
 
-    std::fprintf(out, "samplers (%zu)\n", plugins.Samplers().size());
-    for (const auto& t : plugins.Samplers()) {
+    std::fprintf(out, "samplers (%zu)\n", catalog.Samplers().size());
+    for (const auto& t : catalog.Samplers()) {
         const auto& s = t.spec;
         std::fprintf(out, "  %-16s %s every=%lld%s fill_gaps=%s cols=%zu\n", s.name.c_str(), TriggerName(s.trigger),
                      static_cast<long long>(s.every), s.trigger == Trigger::Time ? "ns" : "",
@@ -80,15 +67,15 @@ void PrintCatalogText(std::FILE* out, const FeatureCatalog& plugins) {
     }
 }
 
-void PrintCatalogJson(std::FILE* out, const FeatureCatalog& plugins) {
+void PrintCatalogJson(std::FILE* out, const FeatureCatalog& catalog) {
     std::fprintf(out, "{\n  \"plugins\": [");
-    for (std::size_t i = 0; i < plugins.PluginCount(); ++i) {
-        const auto& p = plugins.Plugin(i);
+    for (std::size_t i = 0; i < catalog.PluginCount(); ++i) {
+        const auto& p = catalog.Plugin(i);
         std::fprintf(out, "%s\n    {\"name\": %s, \"path\": %s, \"sdk_version\": %s, \"requires\": \"%s\", \"ncol\": %u, \"params\": {",
-                     i ? "," : "", JsonString(plugins.PluginName(i)).c_str(), JsonString(p.Path()).c_str(),
+                     i ? "," : "", JsonString(catalog.PluginName(i)).c_str(), JsonString(p.Path()).c_str(),
                      JsonString(p.Schema().sdk_version).c_str(), RequiresName(p.Schema().requirement),
                      p.Schema().ncol);
-        const auto& params = plugins.PluginParams(i);
+        const auto& params = catalog.PluginParams(i);
         for (std::size_t j = 0; j < params.size(); ++j) {
             std::fprintf(out, "%s%s: %s", j ? ", " : "", JsonString(params[j].first).c_str(),
                          JsonString(params[j].second).c_str());
@@ -96,15 +83,15 @@ void PrintCatalogJson(std::FILE* out, const FeatureCatalog& plugins) {
         std::fprintf(out, "}}");
     }
     std::fprintf(out, "\n  ],\n  \"columns\": [");
-    for (std::size_t i = 0; i < plugins.Columns().size(); ++i) {
-        const auto& c = plugins.Columns()[i];
+    for (std::size_t i = 0; i < catalog.Columns().size(); ++i) {
+        const auto& c = catalog.Columns()[i];
         std::fprintf(out, "%s\n    {\"name\": %s, \"unit\": %s, \"kind\": \"%s\", \"doc\": %s, \"plugin\": %s}",
                      i ? "," : "", JsonString(c.name).c_str(), JsonString(c.unit).c_str(), KindName(c.kind),
-                     JsonString(c.doc).c_str(), JsonString(plugins.PluginName(c.plugin_index)).c_str());
+                     JsonString(c.doc).c_str(), JsonString(catalog.PluginName(c.plugin_index)).c_str());
     }
     std::fprintf(out, "\n  ],\n  \"samplers\": [");
-    for (std::size_t i = 0; i < plugins.Samplers().size(); ++i) {
-        const auto& t = plugins.Samplers()[i];
+    for (std::size_t i = 0; i < catalog.Samplers().size(); ++i) {
+        const auto& t = catalog.Samplers()[i];
         const auto& s = t.spec;
         std::fprintf(out, "%s\n    {\"name\": %s, \"trigger\": \"%s\", \"every\": %lld, \"fill_gaps\": %s, \"columns\": [",
                      i ? "," : "", JsonString(s.name).c_str(), TriggerName(s.trigger),
@@ -171,34 +158,6 @@ void PrintFeedReport(std::FILE* out, const PipelineTable& table, const RunResult
         print_stats(book.GetStats());
         std::fprintf(out, "\n");
     }
-}
-
-std::vector<std::filesystem::path> WriteSamplerCsv(const PipelineTable& table, const std::filesystem::path& dir) {
-    std::filesystem::create_directories(dir);
-    std::vector<std::filesystem::path> written;
-    const auto& templates = table.Plugins().Samplers();
-    for (std::size_t si = 0; si < templates.size(); ++si) {
-        const SamplerTemplate& t = templates[si];
-        const std::filesystem::path path = dir / (t.spec.name + ".csv");
-        std::unique_ptr<std::FILE, int (*)(std::FILE*)> f(std::fopen(path.string().c_str(), "w"), &std::fclose);
-        if (!f) throw std::runtime_error("cannot create " + path.string());
-
-        std::fprintf(f.get(), "instrument,symbol,ts");
-        for (const auto& n : t.names) std::fprintf(f.get(), ",%s", CsvString(n).c_str());
-        std::fprintf(f.get(), "\n");
-
-        for (const auto& [id, e] : table.Entries()) {
-            const std::string symbol = CsvString(e.pipeline->Engine().GetInstrument().symbol);
-            const RowBuffer& rows = e.pipeline->Engine().GetSampler(si).Rows();
-            for (std::size_t r = 0; r < rows.RowCount(); ++r) {
-                std::fprintf(f.get(), "%u,%s,%lld", id, symbol.c_str(), static_cast<long long>(rows.Ts(r)));
-                for (const double v : rows.Row(r)) std::fprintf(f.get(), ",%.17g", v);
-                std::fprintf(f.get(), "\n");
-            }
-        }
-        written.push_back(path);
-    }
-    return written;
 }
 
 }  // namespace nq

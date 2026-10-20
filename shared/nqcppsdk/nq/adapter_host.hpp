@@ -3,13 +3,12 @@
 #include <dlfcn.h>
 
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
 #include <nq/adapter_abi.h>
-#include <nq/host.hpp>
+#include <nq/plugin_error.hpp>
 
 #ifndef NQ_ADAPTER_ABI_HASH
 #error "NQ_ADAPTER_ABI_HASH is not defined: link the target against nqcppsdk::nqcppsdk"
@@ -20,17 +19,15 @@ namespace nq::host {
 struct AdapterFns {
     nq_adapter_describe_fn describe = nullptr;
     nq_adapter_init_fn init = nullptr;
-    nq_adapter_start_fn start = nullptr;
-    nq_adapter_stop_fn stop = nullptr;
-    nq_adapter_destroy_fn destroy = nullptr;
+    nq_adapter_next_fn next = nullptr;
     nq_adapter_instrument_fn instrument = nullptr;
+    nq_adapter_destroy_fn destroy = nullptr;
 };
 
 class AdapterInstance {
 public:
-    AdapterInstance(void* state, const AdapterFns& fns, const nq_adapter_schema* schema,
-                    std::unique_ptr<nq_sink> sink) noexcept
-        : state_(state), fns_(fns), schema_(schema), sink_(std::move(sink)) {}
+    AdapterInstance(void* state, const AdapterFns& fns, const nq_adapter_schema* schema) noexcept
+        : state_(state), fns_(fns), schema_(schema) {}
 
     ~AdapterInstance() { Release(); }
 
@@ -38,11 +35,7 @@ public:
     AdapterInstance& operator=(const AdapterInstance&) = delete;
 
     AdapterInstance(AdapterInstance&& other) noexcept
-        : state_(std::exchange(other.state_, nullptr)),
-          fns_(other.fns_),
-          schema_(other.schema_),
-          sink_(std::move(other.sink_)),
-          started_(std::exchange(other.started_, false)) {}
+        : state_(std::exchange(other.state_, nullptr)), fns_(other.fns_), schema_(other.schema_) {}
 
     AdapterInstance& operator=(AdapterInstance&& other) noexcept {
         if (this != &other) {
@@ -50,25 +43,13 @@ public:
             state_ = std::exchange(other.state_, nullptr);
             fns_ = other.fns_;
             schema_ = other.schema_;
-            sink_ = std::move(other.sink_);
-            started_ = std::exchange(other.started_, false);
         }
         return *this;
     }
 
     const nq_adapter_schema& Schema() const noexcept { return *schema_; }
 
-    void Start() {
-        if (started_) return;
-        if (fns_.start(state_) != 0) throw PluginError(std::string("adapter start failed: ") + schema_->name);
-        started_ = true;
-    }
-
-    void Stop() noexcept {
-        if (!started_) return;
-        fns_.stop(state_);
-        started_ = false;
-    }
+    int Next(nq_mbo& out) noexcept { return fns_.next(state_, &out); }
 
     std::optional<nq_instrument> Instrument(std::uint32_t id) const noexcept {
         nq_instrument out;
@@ -81,7 +62,6 @@ public:
 private:
     void Release() noexcept {
         if (state_) {
-            Stop();
             fns_.destroy(state_);
             state_ = nullptr;
         }
@@ -90,8 +70,6 @@ private:
     void* state_;
     AdapterFns fns_;
     const nq_adapter_schema* schema_;
-    std::unique_ptr<nq_sink> sink_;
-    bool started_ = false;
 };
 
 class AdapterPlugin {
@@ -102,10 +80,9 @@ public:
         try {
             fns_.describe = Resolve<nq_adapter_describe_fn>(NQ_SYM_ADAPTER_DESCRIBE);
             fns_.init = Resolve<nq_adapter_init_fn>(NQ_SYM_ADAPTER_INIT);
-            fns_.start = Resolve<nq_adapter_start_fn>(NQ_SYM_ADAPTER_START);
-            fns_.stop = Resolve<nq_adapter_stop_fn>(NQ_SYM_ADAPTER_STOP);
-            fns_.destroy = Resolve<nq_adapter_destroy_fn>(NQ_SYM_ADAPTER_DESTROY);
+            fns_.next = Resolve<nq_adapter_next_fn>(NQ_SYM_ADAPTER_NEXT);
             fns_.instrument = Resolve<nq_adapter_instrument_fn>(NQ_SYM_ADAPTER_INSTRUMENT);
+            fns_.destroy = Resolve<nq_adapter_destroy_fn>(NQ_SYM_ADAPTER_DESTROY);
             schema_ = fns_.describe();
             if (!schema_) throw PluginLoadError("nq_adapter_describe returned null: " + path);
             if (schema_->abi_hash != NQ_ADAPTER_ABI_HASH) {
@@ -148,11 +125,10 @@ public:
     const nq_adapter_schema& Schema() const noexcept { return *schema_; }
     const AdapterFns& Fns() const noexcept { return fns_; }
 
-    AdapterInstance Create(const nq_params& params, const nq_sink& sink) const {
-        auto owned = std::make_unique<nq_sink>(sink);
-        void* state = fns_.init(&params, owned.get());
+    AdapterInstance Create(const nq_params& params) const {
+        void* state = fns_.init(&params);
         if (!state) throw PluginInitError("nq_adapter_init failed: " + path_);
-        return AdapterInstance(state, fns_, schema_, std::move(owned));
+        return AdapterInstance(state, fns_, schema_);
     }
 
 private:

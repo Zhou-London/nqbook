@@ -7,8 +7,9 @@
 #include <utility>
 #include <vector>
 
-#include <nlib/common.h>
-#include <nq/abi.h>
+#include <nq/feature_abi.h>
+
+#include <Defaults.h>
 
 #include <Feature/RowBuffer.h>
 
@@ -19,7 +20,7 @@ enum class Trigger : std::uint8_t { Time = 0, Events = 1, Trades = 2 };
 struct SamplerSpec {
     std::string name;
     Trigger trigger = Trigger::Time;
-    std::int64_t every = 1'000'000'000;
+    std::int64_t every = defaults::kSamplerPeriodNs;
     bool fill_gaps = false;
     std::vector<std::string> columns;
 
@@ -91,7 +92,7 @@ public:
         Emit(last_ts_, read());
     }
 
-    bool OnEvent(std::int64_t ts, nlib::action a) noexcept;
+    bool OnEvent(std::int64_t ts, std::uint8_t a) noexcept;
 
     void Emit(std::int64_t ts, std::span<const double> values);
     void ResetBaseline() noexcept;

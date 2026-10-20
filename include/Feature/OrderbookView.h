@@ -2,18 +2,18 @@
 
 #include <cstdint>
 
-#include <nq/abi.h>
+#include <nq/feature_abi.h>
 
 #include <Orderbook.h>
 
 namespace nq {
 
-class BookAdapter {
+class OrderbookView {
 public:
-    explicit BookAdapter(const Orderbook& book) noexcept;
+    explicit OrderbookView(const Orderbook& book) noexcept;
 
-    BookAdapter(const BookAdapter&) = delete;
-    BookAdapter& operator=(const BookAdapter&) = delete;
+    OrderbookView(const OrderbookView&) = delete;
+    OrderbookView& operator=(const OrderbookView&) = delete;
 
     const nq_book_view& View() const noexcept { return view_; }
     const Orderbook& Book() const noexcept { return *book_; }

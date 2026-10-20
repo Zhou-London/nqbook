@@ -1,97 +1,46 @@
 #pragma once
 
-#include <chrono>
-#include <condition_variable>
-#include <mutex>
-#include <optional>
+#include <cstddef>
+#include <limits>
 #include <vector>
 
 #include <nq/adapter.hpp>
-#include <nq/adapter_abi.h>
 
 namespace nq::testing {
-
-class MockSink {
-public:
-    MockSink() = default;
-    MockSink(const MockSink&) = delete;
-    MockSink& operator=(const MockSink&) = delete;
-
-    const nq_sink* Raw() const noexcept { return &sink_; }
-    Sink View() const noexcept { return Sink(&sink_); }
-
-    bool WaitEnd(std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
-        std::unique_lock lock(mu_);
-        return cv_.wait_for(lock, timeout, [&] { return ended_; });
-    }
-
-    bool Ended() const {
-        std::lock_guard lock(mu_);
-        return ended_;
-    }
-
-    std::optional<int> Status() const {
-        std::lock_guard lock(mu_);
-        if (!ended_) return std::nullopt;
-        return status_;
-    }
-
-    std::vector<nq_mbo> Events() const {
-        std::lock_guard lock(mu_);
-        return events_;
-    }
-
-    std::size_t Count() const {
-        std::lock_guard lock(mu_);
-        return events_.size();
-    }
-
-private:
-    static void Push(void* ctx, const nq_mbo* m) noexcept {
-        auto& self = *static_cast<MockSink*>(ctx);
-        std::lock_guard lock(self.mu_);
-        self.events_.push_back(*m);
-    }
-
-    static void End(void* ctx, int status) noexcept {
-        auto& self = *static_cast<MockSink*>(ctx);
-        {
-            std::lock_guard lock(self.mu_);
-            self.ended_ = true;
-            self.status_ = status;
-        }
-        self.cv_.notify_all();
-    }
-
-    mutable std::mutex mu_;
-    std::condition_variable cv_;
-    std::vector<nq_mbo> events_;
-    bool ended_ = false;
-    int status_ = 0;
-    nq_sink sink_{this, &MockSink::Push, &MockSink::End};
-};
 
 template <AdapterType A>
 class AdapterSandbox {
 public:
-    explicit AdapterSandbox(const nq_params* params) : adapter_(Params(params), sink_.View()) {}
+    explicit AdapterSandbox(const nq_params* params) : adapter_(Params(params)) {}
 
-    MockSink& Sink() noexcept { return sink_; }
     A& Adapter() noexcept { return adapter_; }
+    const A& Adapter() const noexcept { return adapter_; }
 
-    void Start() { adapter_.Start(); }
-    void Stop() noexcept { adapter_.Stop(); }
-
-    bool RunToEnd(std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
-        adapter_.Start();
-        const bool ended = sink_.WaitEnd(timeout);
-        adapter_.Stop();
-        return ended;
+    Next Step(Mbo& out) {
+        last_ = adapter_.Next(out);
+        return last_;
     }
 
+    std::vector<Mbo> Drain(std::size_t max = std::numeric_limits<std::size_t>::max()) {
+        std::vector<Mbo> out;
+        Mbo m;
+        while (out.size() < max) {
+            const Next r = Step(m);
+            if (r == Next::Event) {
+                out.push_back(m);
+                continue;
+            }
+            if (r == Next::Again) continue;
+            break;
+        }
+        return out;
+    }
+
+    Next LastStatus() const noexcept { return last_; }
+
 private:
-    MockSink sink_;
     A adapter_;
+    Next last_ = Next::Again;
 };
 
 }  // namespace nq::testing

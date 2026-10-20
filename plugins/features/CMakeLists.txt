@@ -1,0 +1,1 @@
+nq_add_plugin(example_features example/example_features.cpp)

@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include <nq/host.hpp>
+#include <nq/feature_host.hpp>
 
 #include <Feature/Sampler.h>
 

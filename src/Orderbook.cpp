@@ -9,13 +9,13 @@ Orderbook::Orderbook(std::size_t expected_orders) : pool_(expected_orders) {
 }
 
 // Feed Handlers
-nlib::qty_t Orderbook::Apply(const nlib::mbo& m) {
+nlib::qty_t Orderbook::Apply(const nq_mbo& m) {
     switch (m.action) {
-        case nlib::action::add: OnOrder(m); return 0;
-        case nlib::action::cancel: OnCancel(m); return 0;
-        case nlib::action::modify: OnModify(m); return 0;
-        case nlib::action::trade: return OnTrade(m);
-        case nlib::action::clear: OnClear(m); return 0;
+        case NQ_ADD: OnOrder(m); return 0;
+        case NQ_CANCEL: OnCancel(m); return 0;
+        case NQ_MODIFY: OnModify(m); return 0;
+        case NQ_TRADE: return OnTrade(m);
+        case NQ_CLEAR: OnClear(m); return 0;
     }
     return 0;
 }
@@ -31,7 +31,7 @@ std::size_t Orderbook::Consume(Queue& q, std::size_t max) {
     return n;
 }
 
-void Orderbook::OnOrder(const nlib::mbo& m) {
+void Orderbook::OnOrder(const nq_mbo& m) {
     ++stats_.adds;
     last_ts_ = m.ts;
     if (m.qty <= 0) { ++stats_.qty_invalid; return; }
@@ -51,7 +51,7 @@ void Orderbook::OnOrder(const nlib::mbo& m) {
     orders_.try_emplace(nlib::order_id{m.id}, o);
 }
 
-void Orderbook::OnCancel(const nlib::mbo& m) {
+void Orderbook::OnCancel(const nq_mbo& m) {
     ++stats_.cancels;
     last_ts_ = m.ts;
     nlib::order* o = MutableOrder(m.id);
@@ -65,7 +65,7 @@ void Orderbook::OnCancel(const nlib::mbo& m) {
     o->level->qty -= m.qty;
 }
 
-void Orderbook::OnModify(const nlib::mbo& m) {
+void Orderbook::OnModify(const nq_mbo& m) {
     ++stats_.modifies;
     last_ts_ = m.ts;
     nlib::order* o = MutableOrder(m.id);
@@ -95,7 +95,7 @@ void Orderbook::OnModify(const nlib::mbo& m) {
     o->qty = m.qty;
 }
 
-nlib::qty_t Orderbook::OnTrade(const nlib::mbo& m) {
+nlib::qty_t Orderbook::OnTrade(const nq_mbo& m) {
     ++stats_.trades;
     last_ts_ = m.ts;
     if (m.qty <= 0) { ++stats_.qty_invalid; return 0; }
@@ -116,7 +116,7 @@ nlib::qty_t Orderbook::OnTrade(const nlib::mbo& m) {
     return filled;
 }
 
-void Orderbook::OnClear(const nlib::mbo& m) {
+void Orderbook::OnClear(const nq_mbo& m) {
     ++stats_.clears;
     last_ts_ = m.ts;
     bids_.clear();
@@ -134,8 +134,8 @@ const nlib::level* Orderbook::BestAsk() const noexcept {
     return asks_.empty() ? nullptr : &asks_.begin()->second;
 }
 
-const nlib::level* Orderbook::FindLevel(nlib::side s, nlib::price_t p) const noexcept {
-    if (s == nlib::side::bid) {
+const nlib::level* Orderbook::FindLevel(std::uint8_t s, nlib::price_t p) const noexcept {
+    if (s == NQ_BID) {
         auto it = bids_.find(p);
         return it == bids_.end() ? nullptr : &it->second;
     }
@@ -183,17 +183,17 @@ nlib::order* Orderbook::MutableOrder(nlib::order_id id) noexcept {
     return it == orders_.end() ? nullptr : it->second;
 }
 
-nlib::level* Orderbook::FindOrCreateLevel(nlib::side s, nlib::price_t p) {
+nlib::level* Orderbook::FindOrCreateLevel(std::uint8_t s, nlib::price_t p) {
     auto emplace = [p](auto& levels) -> nlib::level* {
         auto [it, inserted] = levels.try_emplace(p);
         if (inserted) it->second = nlib::level{p, 0, 0, nullptr, nullptr};
         return &it->second;
     };
-    return s == nlib::side::bid ? emplace(bids_) : emplace(asks_);
+    return s == NQ_BID ? emplace(bids_) : emplace(asks_);
 }
 
-nlib::level* Orderbook::MutableLevel(nlib::side s, nlib::price_t p) noexcept {
-    if (s == nlib::side::bid) {
+nlib::level* Orderbook::MutableLevel(std::uint8_t s, nlib::price_t p) noexcept {
+    if (s == NQ_BID) {
         auto it = bids_.find(p);
         return it == bids_.end() ? nullptr : &it->second;
     }
@@ -201,8 +201,8 @@ nlib::level* Orderbook::MutableLevel(nlib::side s, nlib::price_t p) noexcept {
     return it == asks_.end() ? nullptr : &it->second;
 }
 
-void Orderbook::RemoveLevel(nlib::level* lv, nlib::side s) {
-    if (s == nlib::side::bid) bids_.erase(lv->price);
+void Orderbook::RemoveLevel(nlib::level* lv, std::uint8_t s) {
+    if (s == NQ_BID) bids_.erase(lv->price);
     else asks_.erase(lv->price);
 }
 
@@ -248,7 +248,7 @@ nlib::qty_t Orderbook::Fill(nlib::order* o, nlib::qty_t qty) {
     return filled;
 }
 
-nlib::qty_t Orderbook::FillLevel(nlib::side s, nlib::price_t p, nlib::qty_t qty) {
+nlib::qty_t Orderbook::FillLevel(std::uint8_t s, nlib::price_t p, nlib::qty_t qty) {
     nlib::level* lv = MutableLevel(s, p);
     if (!lv) return 0;
 

@@ -1,6 +1,0 @@
-add_executable(replay_test replay_test.cpp)
-target_link_libraries(replay_test PRIVATE nqcppsdk::nqcppsdk ${CMAKE_DL_LIBS})
-target_compile_options(replay_test PRIVATE -Wall -Wextra -Wpedantic)
-target_compile_definitions(replay_test PRIVATE NQ_REPLAY_ADAPTER_PATH="$<TARGET_FILE:replay>")
-add_dependencies(replay_test replay)
-add_test(NAME replay_test COMMAND replay_test)

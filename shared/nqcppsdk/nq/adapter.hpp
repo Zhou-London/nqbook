@@ -1,13 +1,10 @@
 #pragma once
 
 #include <cstdint>
-#include <stop_token>
-#include <string>
-#include <thread>
 #include <type_traits>
 
 #include <nq/adapter_abi.h>
-#include <nq/event.hpp>
+#include <nq/types.hpp>
 #include <nq/instrument.hpp>
 #include <nq/params.hpp>
 
@@ -21,6 +18,13 @@ enum class Provides : std::uint8_t {
     L1 = NQ_REQUIRES_L1,
     MBP = NQ_REQUIRES_MBP,
     MBO = NQ_REQUIRES_MBO
+};
+
+enum class Next : int {
+    Event = NQ_NEXT_EVENT,
+    Again = NQ_NEXT_AGAIN,
+    End = NQ_NEXT_END,
+    Error = NQ_NEXT_ERROR
 };
 
 struct Mbo {
@@ -48,54 +52,16 @@ struct Mbo {
     }
 };
 
-class Sink {
-public:
-    explicit Sink(const nq_sink* sink) noexcept : sink_(*sink) {}
-
-    void Push(const nq_mbo& m) noexcept { sink_.push(sink_.ctx, &m); }
-    void Push(const Mbo& m) noexcept {
-        const nq_mbo raw = m.Raw();
-        sink_.push(sink_.ctx, &raw);
-    }
-    void End(int status = 0) noexcept { sink_.end(sink_.ctx, status); }
-
-    const nq_sink& Raw() const noexcept { return sink_; }
-
-private:
-    nq_sink sink_;
-};
-
 struct AdapterBase {
     const Instrument* FindInstrument(std::uint32_t) const noexcept { return nullptr; }
 };
 
-template <class Derived>
-class ThreadedAdapter : public AdapterBase {
-public:
-    void Start() {
-        if (thread_.joinable()) return;
-        thread_ = std::jthread([this](std::stop_token st) { static_cast<Derived*>(this)->Run(st); });
-    }
-
-    void Stop() noexcept {
-        if (!thread_.joinable()) return;
-        thread_.request_stop();
-        thread_.join();
-    }
-
-    ~ThreadedAdapter() { Stop(); }
-
-private:
-    std::jthread thread_;
-};
-
 template <class A>
 concept AdapterType =
-    std::is_constructible_v<A, const Params&, Sink> &&
-    requires(A& a, const A& ca, std::uint32_t id) {
+    std::is_constructible_v<A, const Params&> &&
+    requires(A& a, const A& ca, Mbo& out, std::uint32_t id) {
         { A::kName } -> std::convertible_to<const char*>;
-        a.Start();
-        { a.Stop() } noexcept;
+        { a.Next(out) } -> std::same_as<Next>;
         { ca.FindInstrument(id) } noexcept -> std::convertible_to<const Instrument*>;
     };
 
@@ -119,27 +85,28 @@ constexpr std::uint8_t ProvidesOf() noexcept {
                                               ::nq::detail::ProvidesOf<Type>()};                \
         return &schema;                                                                         \
     }                                                                                           \
-    NQ_EXPORT void* nq_adapter_init(const nq_params* p, const nq_sink* sink) {                  \
+    NQ_EXPORT void* nq_adapter_init(const nq_params* p) {                                       \
         try {                                                                                   \
-            return new Type(::nq::Params(p), ::nq::Sink(sink));                                 \
+            return new Type(::nq::Params(p));                                                   \
         } catch (...) {                                                                         \
             return nullptr;                                                                     \
         }                                                                                       \
     }                                                                                           \
-    NQ_EXPORT int nq_adapter_start(void* s) {                                                   \
+    NQ_EXPORT int nq_adapter_next(void* s, nq_mbo* out) {                                       \
         try {                                                                                   \
-            static_cast<Type*>(s)->Start();                                                     \
-            return 0;                                                                           \
+            ::nq::Mbo m;                                                                        \
+            const ::nq::Next r = static_cast<Type*>(s)->Next(m);                                \
+            if (r == ::nq::Next::Event) *out = m.Raw();                                         \
+            return static_cast<int>(r);                                                         \
         } catch (...) {                                                                         \
-            return -1;                                                                          \
+            return NQ_NEXT_ERROR;                                                               \
         }                                                                                       \
     }                                                                                           \
-    NQ_EXPORT void nq_adapter_stop(void* s) { static_cast<Type*>(s)->Stop(); }                  \
-    NQ_EXPORT void nq_adapter_destroy(void* s) { delete static_cast<Type*>(s); }                \
     NQ_EXPORT int nq_adapter_instrument(void* s, uint32_t id, nq_instrument* out) {             \
         const ::nq::Instrument* i = static_cast<const Type*>(s)->FindInstrument(id);            \
         if (!i) return 1;                                                                       \
         *out = nq_instrument{i->id, i->symbol.c_str(), i->tick_size, i->lot_size};              \
         return 0;                                                                               \
     }                                                                                           \
+    NQ_EXPORT void nq_adapter_destroy(void* s) { delete static_cast<Type*>(s); }                \
     }

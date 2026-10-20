@@ -11,12 +11,12 @@ Sampler::Sampler(SamplerSpec spec, std::vector<std::string> names, std::vector<S
       last_(columns_.size(), 0.0),
       row_(columns_.size(), 0.0) {}
 
-bool Sampler::OnEvent(std::int64_t ts, nlib::action a) noexcept {
+bool Sampler::OnEvent(std::int64_t ts, std::uint8_t a) noexcept {
     last_ts_ = ts;
     switch (spec_.trigger) {
         case Trigger::Events: break;
         case Trigger::Trades:
-            if (a != nlib::action::trade) return false;
+            if (a != NQ_TRADE) return false;
             break;
         case Trigger::Time:
             dirty_ = true;

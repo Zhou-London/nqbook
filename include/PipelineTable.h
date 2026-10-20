@@ -10,6 +10,7 @@
 
 #include <nlib/common.h>
 
+#include <Defaults.h>
 #include <Feature/FeatureCatalog.h>
 #include <Pipeline.h>
 
@@ -40,12 +41,12 @@ public:
         InstrumentStats stats;
     };
 
-    PipelineTable(const FeatureCatalog& plugins, Resolver resolver, std::size_t expected_orders = 1024);
+    PipelineTable(const FeatureCatalog& catalog, Resolver resolver, std::size_t expected_orders = defaults::kExpectedOrders);
 
     PipelineTable(const PipelineTable&) = delete;
     PipelineTable& operator=(const PipelineTable&) = delete;
 
-    nlib::qty_t Apply(const nlib::mbo& m);
+    nlib::qty_t Apply(const nq_mbo& m);
     std::size_t Consume(Orderbook::Queue& q, std::size_t max = std::numeric_limits<std::size_t>::max());
     void Close();
 
@@ -53,13 +54,13 @@ public:
     const Pipeline* Find(std::uint32_t instrument) const noexcept;
     const std::map<std::uint32_t, Entry>& Entries() const noexcept { return entries_; }
     std::size_t InstrumentCount() const noexcept { return entries_.size(); }
-    const FeatureCatalog& Plugins() const noexcept { return *plugins_; }
+    const FeatureCatalog& Catalog() const noexcept { return *catalog_; }
     const FeedStats& Stats() const noexcept { return stats_; }
 
 private:
     Entry& Resolve(std::uint32_t instrument);
 
-    const FeatureCatalog* plugins_;
+    const FeatureCatalog* catalog_;
     Resolver resolver_;
     std::size_t expected_orders_;
     std::map<std::uint32_t, Entry> entries_;
