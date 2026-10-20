@@ -19,7 +19,11 @@ static bool Near(double a, double b) { return std::fabs(a - b) < 1e-9; }
 
 static int TestSandbox() {
     nq::ParamsBuilder pb;
-    pb.Symbol("TEST").PriceScale(100).QtyScale(10).Set("min_qty", "5");
+    pb.Symbol("TEST").PriceScale(100).QtyScale(10).Set("min_qty", "1").Set("min_qty", "5");
+    {
+        const nq::Params view(pb.Build());
+        CHECK(view.Raw()->nkv == 1 && view.GetInt("min_qty", 0) == 5 && !view.Get("absent"));
+    }
 
     nq::testing::Sandbox<nq_test::Spread, nq_test::TradeVolume> sb(pb.Build());
     CHECK(decltype(sb)::BundleType::kNcol == 5);

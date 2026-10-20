@@ -37,11 +37,12 @@ std::vector<std::filesystem::path> WriteSamplerCsv(const PipelineTable& table, c
         for (const auto& n : t.names) std::fprintf(f.get(), ",%s", CsvString(n).c_str());
         std::fprintf(f.get(), "\n");
 
-        for (const auto& [id, e] : table.Entries()) {
+        for (const auto& e : table.Entries()) {
+            if (!e.pipeline) continue;
             const std::string symbol = CsvString(e.pipeline->Engine().GetInstrument().symbol);
             const RowBuffer& rows = e.pipeline->Engine().GetSampler(si).Rows();
             for (std::size_t r = 0; r < rows.RowCount(); ++r) {
-                std::fprintf(f.get(), "%u,%s,%lld", id, symbol.c_str(), static_cast<long long>(rows.Ts(r)));
+                std::fprintf(f.get(), "%u,%s,%lld", e.id, symbol.c_str(), static_cast<long long>(rows.Ts(r)));
                 for (const double v : rows.Row(r)) std::fprintf(f.get(), ",%.17g", v);
                 std::fprintf(f.get(), "\n");
             }

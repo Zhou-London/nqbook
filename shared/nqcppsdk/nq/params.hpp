@@ -88,6 +88,12 @@ public:
     ParamsBuilder& QtyScale(std::int64_t v) { qty_scale_ = v; return *this; }
 
     ParamsBuilder& Set(std::string key, std::string value) {
+        for (auto& [k, v] : kv_) {
+            if (k == key) {
+                v = std::move(value);
+                return *this;
+            }
+        }
         kv_.emplace_back(std::move(key), std::move(value));
         return *this;
     }

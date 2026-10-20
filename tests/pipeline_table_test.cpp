@@ -28,8 +28,8 @@ static int TestMarket() {
     catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
     catalog.AddSampler(nq::SamplerSpec::Trades("t", 1).Columns({"test.trades"}));
 
-    nq::PipelineTable table(catalog, &Resolve, 16);
-    CHECK(table.InstrumentCount() == 0);
+    nq::PipelineTable table(catalog, &Resolve, 16, 4);
+    CHECK(table.InstrumentCount() == 0 && table.Entries().size() == 4 && table.Find(9) == nullptr);
 
     table.Apply(Add(Sec(0.1), 1, 1, NQ_BID, P(100.50), Q(7)));
     table.Apply(Add(Sec(0.2), 2, 1, NQ_BID, P(50.00), Q(3)));
@@ -59,9 +59,9 @@ static int TestMarket() {
     table.Apply(Add(Sec(1.0), 3, 9, NQ_BID, P(1.0), Q(1)));
     CHECK(table.InstrumentCount() == 3);
     CHECK(table.Find(3)->Engine().GetInstrument().symbol == "#3");
-    CHECK(table.Stats().instrument_unknown == 1 && table.Entries().at(3).stats.resolved == false);
+    CHECK(table.Stats().instrument_unknown == 1 && table.Entries()[3].stats.resolved == false);
     CHECK(table.Stats().events == 9 && table.Stats().ts_regressions == 1);
-    CHECK(table.Entries().at(1).stats.events == 5 && table.Entries().at(1).stats.ts_regressions == 0);
+    CHECK(table.Entries()[1].stats.events == 5 && table.Entries().at(1).stats.ts_regressions == 0);
     CHECK(table.Stats().first_ts == static_cast<std::int64_t>(0.1 * kSec) && table.Stats().last_ts == kSec);
 
     table.Apply(Add(Sec(2.5), 1, 7, NQ_BID, P(100.00), Q(1)));
@@ -74,6 +74,10 @@ static int TestMarket() {
     CHECK(a.RowCount() == 3 && a.Ts(2) == 3 * kSec && std::isnan(a.At(2, 0)));
     CHECK(b.RowCount() == 2);
     CHECK(c.RowCount() == 1);
+
+    table.Apply(Add(Sec(2.6), 700, 1, NQ_BID, P(1.0), Q(1)));
+    CHECK(table.InstrumentCount() == 4 && table.Entries().size() == 701 && table.Entries()[700].id == 700);
+    CHECK(table.Find(700)->Engine().GetInstrument().symbol == "#700" && table.Find(699) == nullptr);
     return 0;
 }
 
@@ -95,7 +99,7 @@ static int TestSession() {
     CHECK(m.Find(1)->Book().OrderCount() == 334 && m.Find(2)->Book().OrderCount() == 333);
     CHECK(m.Find(1)->Engine().GetSampler(0).Rows().RowCount() == 34);
     CHECK(m.Find(2)->Engine().GetSampler(0).Rows().RowCount() == 34 && m.Find(3)->Engine().GetSampler(0).Rows().RowCount() == 34);
-    CHECK(m.Entries().at(2).stats.events == 333);
+    CHECK(m.Entries()[2].stats.events == 333);
 
     nq::ParamsBuilder endless;
     endless.Set("count", "1").Set("endless", "true");

@@ -4,9 +4,9 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
-#include <map>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include <nlib/common.h>
 
@@ -37,11 +37,14 @@ public:
     using Resolver = std::function<std::optional<Instrument>(std::uint32_t)>;
 
     struct Entry {
+        std::uint32_t id = 0;
         std::unique_ptr<Pipeline> pipeline;
         InstrumentStats stats;
     };
 
-    PipelineTable(const FeatureCatalog& catalog, Resolver resolver, std::size_t expected_orders = defaults::kExpectedOrders);
+    PipelineTable(const FeatureCatalog& catalog, Resolver resolver,
+                  std::size_t expected_orders = defaults::kExpectedOrders,
+                  std::size_t instrument_slots = defaults::kInstrumentSlots);
 
     PipelineTable(const PipelineTable&) = delete;
     PipelineTable& operator=(const PipelineTable&) = delete;
@@ -52,8 +55,9 @@ public:
 
     Pipeline* Find(std::uint32_t instrument) noexcept;
     const Pipeline* Find(std::uint32_t instrument) const noexcept;
-    const std::map<std::uint32_t, Entry>& Entries() const noexcept { return entries_; }
-    std::size_t InstrumentCount() const noexcept { return entries_.size(); }
+    const std::vector<Entry>& Entries() const noexcept { return entries_; }
+    const std::vector<Pipeline*>& Live() const noexcept { return live_; }
+    std::size_t InstrumentCount() const noexcept { return live_.size(); }
     const FeatureCatalog& Catalog() const noexcept { return *catalog_; }
     const FeedStats& Stats() const noexcept { return stats_; }
 
@@ -63,7 +67,8 @@ private:
     const FeatureCatalog* catalog_;
     Resolver resolver_;
     std::size_t expected_orders_;
-    std::map<std::uint32_t, Entry> entries_;
+    std::vector<Entry> entries_;
+    std::vector<Pipeline*> live_;
     FeedStats stats_;
 };
 

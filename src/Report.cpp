@@ -114,7 +114,8 @@ void PrintFeedReport(std::FILE* out, const PipelineTable& table, const RunResult
                  static_cast<long long>(f.last_ts), result.adapter_status, result.interrupted ? " interrupted" : "");
 
     Orderbook::Stats total;
-    for (const auto& [id, e] : table.Entries()) {
+    for (const auto& e : table.Entries()) {
+        if (!e.pipeline) continue;
         const Orderbook::Stats& s = e.pipeline->Book().GetStats();
         total.adds += s.adds;
         total.cancels += s.cancels;
@@ -147,11 +148,12 @@ void PrintFeedReport(std::FILE* out, const PipelineTable& table, const RunResult
     print_stats(total);
     std::fprintf(out, "\n");
 
-    for (const auto& [id, e] : table.Entries()) {
+    for (const auto& e : table.Entries()) {
+        if (!e.pipeline) continue;
         const auto& spec = e.pipeline->Engine().GetInstrument();
         const Orderbook& book = e.pipeline->Book();
         std::fprintf(out, "  %-6u %-16s %s events=%llu ts_regressions=%llu orders=%zu bid_levels=%zu ask_levels=%zu  ",
-                     id, spec.symbol.c_str(), e.stats.resolved ? "" : "(unresolved)",
+                     e.id, spec.symbol.c_str(), e.stats.resolved ? "" : "(unresolved)",
                      static_cast<unsigned long long>(e.stats.events),
                      static_cast<unsigned long long>(e.stats.ts_regressions), book.OrderCount(),
                      book.BidLevelCount(), book.AskLevelCount());

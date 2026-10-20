@@ -1,25 +1,35 @@
 #include <PipelineTable.h>
 
+#include <algorithm>
 #include <string>
 
 namespace nq {
 
-PipelineTable::PipelineTable(const FeatureCatalog& catalog, Resolver resolver, std::size_t expected_orders)
-    : catalog_(&catalog), resolver_(std::move(resolver)), expected_orders_(expected_orders) {}
+PipelineTable::PipelineTable(const FeatureCatalog& catalog, Resolver resolver, std::size_t expected_orders,
+                             std::size_t instrument_slots)
+    : catalog_(&catalog), resolver_(std::move(resolver)), expected_orders_(expected_orders) {
+    entries_.resize(instrument_slots);
+    for (std::size_t i = 0; i < entries_.size(); ++i) entries_[i].id = static_cast<std::uint32_t>(i);
+}
 
 PipelineTable::Entry& PipelineTable::Resolve(std::uint32_t instrument) {
-    auto it = entries_.find(instrument);
-    if (it != entries_.end()) return it->second;
+    if (instrument >= entries_.size()) {
+        const std::size_t old = entries_.size();
+        entries_.resize(std::max<std::size_t>(instrument + 1, old * 2));
+        for (std::size_t i = old; i < entries_.size(); ++i) entries_[i].id = static_cast<std::uint32_t>(i);
+    }
+    Entry& entry = entries_[instrument];
+    if (entry.pipeline) return entry;
 
     std::optional<Instrument> spec = resolver_ ? resolver_(instrument) : std::nullopt;
-    Entry entry;
     entry.stats.resolved = spec.has_value();
     if (!spec) {
         ++stats_.instrument_unknown;
         spec = Instrument{instrument, "#" + std::to_string(instrument), 1, 1};
     }
     entry.pipeline = std::make_unique<Pipeline>(*catalog_, std::move(*spec), expected_orders_);
-    return entries_.emplace(instrument, std::move(entry)).first->second;
+    live_.push_back(entry.pipeline.get());
+    return entry;
 }
 
 nlib::qty_t PipelineTable::Apply(const nq_mbo& m) {
@@ -35,12 +45,12 @@ nlib::qty_t PipelineTable::Apply(const nq_mbo& m) {
     e.stats.last_ts = m.ts;
     ++e.stats.events;
 
-    for (auto& [id, other] : entries_) other.pipeline->Engine().Advance(m.ts);
+    for (Pipeline* p : live_) p->Engine().Advance(m.ts);
     return e.pipeline->Apply(m);
 }
 
 void PipelineTable::Close() {
-    for (auto& [id, e] : entries_) e.pipeline->Close();
+    for (Pipeline* p : live_) p->Close();
 }
 
 std::size_t PipelineTable::Consume(Orderbook::Queue& q, std::size_t max) {
@@ -55,13 +65,11 @@ std::size_t PipelineTable::Consume(Orderbook::Queue& q, std::size_t max) {
 }
 
 Pipeline* PipelineTable::Find(std::uint32_t instrument) noexcept {
-    auto it = entries_.find(instrument);
-    return it == entries_.end() ? nullptr : it->second.pipeline.get();
+    return instrument < entries_.size() ? entries_[instrument].pipeline.get() : nullptr;
 }
 
 const Pipeline* PipelineTable::Find(std::uint32_t instrument) const noexcept {
-    auto it = entries_.find(instrument);
-    return it == entries_.end() ? nullptr : it->second.pipeline.get();
+    return instrument < entries_.size() ? entries_[instrument].pipeline.get() : nullptr;
 }
 
 }  // namespace nq

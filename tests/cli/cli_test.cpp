@@ -213,6 +213,8 @@ static int TestRunCli(const fs::path& tmp) {
     { std::ofstream(adir / "replay.params") << "path=" << fixture.string() << "\n"; }
     r = Run("check-feed --adapter " + Quote(adir / "replay.so"), tmp);
     CHECK(r.code == 0 && Has(r.err, "events=7"));
+    r = Run("check-feed --adapter " + Quote(adir / "replay.so") + " --adapter-param path=" + Quote(tmp / "absent.mbo"), tmp);
+    CHECK(r.code == 4 && Has(r.err, "nq_adapter_init failed"));
 
     r = Run("check-feed --adapter " + Quote(NQ_REPLAY_ADAPTER_PATH), tmp);
     CHECK(r.code == 4 && Has(r.err, "nq_adapter_init failed"));
