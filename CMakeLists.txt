@@ -14,16 +14,25 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
-add_subdirectory(shared/nlib)
-add_subdirectory(shared/nqcppsdk)
-
 include(FetchContent)
+FetchContent_Declare(nlib
+    GIT_REPOSITORY https://github.com/Zhou-London/nlib.git
+    GIT_TAG v0.6.0
+    GIT_SHALLOW ON
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shared/nlib
+)
+FetchContent_Declare(nqcppsdk
+    GIT_REPOSITORY https://github.com/Zhou-London/nqcppsdk.git
+    GIT_TAG v0.1.0
+    GIT_SHALLOW ON
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shared/nqcppsdk
+)
 FetchContent_Declare(cli11
     GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
     GIT_TAG v2.5.0
     GIT_SHALLOW ON
 )
-FetchContent_MakeAvailable(cli11)
+FetchContent_MakeAvailable(nlib nqcppsdk cli11)
 
 add_library(nqbook_core STATIC
     src/Orderbook.cpp

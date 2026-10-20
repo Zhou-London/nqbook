@@ -1,5 +1,5 @@
 add_library(nq_fake_plugin MODULE fake_plugin.c)
-target_include_directories(nq_fake_plugin PRIVATE ${CMAKE_SOURCE_DIR}/shared/nqcppsdk)
+target_include_directories(nq_fake_plugin PRIVATE ${nqcppsdk_SOURCE_DIR})
 set_target_properties(nq_fake_plugin PROPERTIES PREFIX "" SUFFIX ".so" C_VISIBILITY_PRESET hidden)
 target_compile_options(nq_fake_plugin PRIVATE -Wall -Wextra -Wpedantic)
 
