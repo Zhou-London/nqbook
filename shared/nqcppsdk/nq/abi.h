@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define NQ_SDK_VERSION "0.1.0"
+#define NQ_SDK_VERSION "0.1.2"
 
 #if defined(_WIN32)
 #define NQ_EXPORT __declspec(dllexport)

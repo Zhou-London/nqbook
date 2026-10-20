@@ -13,8 +13,6 @@
 
 #include <Config.h>
 
-#include <nq/mbo_file.hpp>
-
 #include "support.hpp"
 
 namespace fs = std::filesystem;
@@ -108,21 +106,6 @@ static int TestFiles(const fs::path& tmp) {
     return 0;
 }
 
-static int WriteFixture(const fs::path& path) {
-    using nq::mbo_file::Writer;
-    Writer w(path, {Writer::MakeInstrument(1, "AAA", 10, 1), Writer::MakeInstrument(2, "BBB", 5, 100)});
-    const std::int64_t s = 1'000'000'000;
-    w.Write(nq_mbo{s / 10, 1, 1005000000000, 700000000, 1, NQ_BID, NQ_ADD});
-    w.Write(nq_mbo{s / 5, 1, 500000000000, 300000000, 2, NQ_BID, NQ_ADD});
-    w.Write(nq_mbo{s / 2, 2, 1007000000000, 300000000, 1, NQ_ASK, NQ_ADD});
-    w.Write(nq_mbo{s / 2 + 1, 2, 1007000000000, 200000000, 1, NQ_ASK, NQ_TRADE});
-    w.Write(nq_mbo{s + s / 5, 3, 1004000000000, 100000000, 1, NQ_BID, NQ_ADD});
-    w.Write(nq_mbo{s + s / 4, 2, 501000000000, 100000000, 2, NQ_ASK, NQ_ADD});
-    w.Write(nq_mbo{2 * s + s / 10, 4, 1003000000000, 100000000, 1, NQ_BID, NQ_ADD});
-    w.Close();
-    return 0;
-}
-
 static int TestCli(const fs::path& tmp) {
     const fs::path dir = tmp / "plugins";
     const std::string base = "check ";
@@ -179,30 +162,25 @@ static int TestCli(const fs::path& tmp) {
 }
 
 static int TestRunCli(const fs::path& tmp) {
-    const fs::path fixture = tmp / "fixture.mbo";
-    if (int rc = WriteFixture(fixture)) return rc;
-    const fs::path out = tmp / "out";
-    const std::string adapter = "--adapter " + Quote(NQ_REPLAY_ADAPTER_PATH) + " --adapter-param path=" + Quote(fixture);
+    const std::string adapter = "--adapter " + Quote(NQ_SYNTHETIC_ADAPTER_PATH) + " --adapter-param count=10 --adapter-param instruments=2";
+    const std::string plugin = " --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --sampler e=events:3 --sampler t=trades:1";
 
-    Result r = Run("run " + adapter + " --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --sampler 1s=time:1s --sampler t=trades:1 --out-format csv --out-dir " + Quote(out), tmp);
+    const fs::path out = tmp / "out";
+    Result r = Run("run " + adapter + plugin + " --out-format csv --out-dir " + Quote(out), tmp);
     CHECK(r.code == 0);
-    CHECK(Has(r.err, "feed  events=7 instruments=2 ts_regressions=0 instrument_unknown=0"));
-    CHECK(Has(r.err, "adapter_status=0"));
-    CHECK(Has(r.err, "1      AAA") && Has(r.err, "2      BBB"));
-    CHECK(Has(r.err, "wrote ") && fs::exists(out / "1s.csv") && fs::exists(out / "t.csv"));
+    CHECK(Has(r.err, "feed  events=10 instruments=2 ts_regressions=0 instrument_unknown=0"));
+    CHECK(Has(r.err, "adapter_status=0") && Has(r.err, "1      SYN1") && Has(r.err, "2      SYN2"));
+    CHECK(Has(r.err, "wrote ") && fs::exists(out / "e.csv") && fs::exists(out / "t.csv"));
     {
-        std::ifstream in(out / "1s.csv");
+        std::ifstream in(out / "e.csv");
         std::string header, line;
         std::getline(in, header);
         CHECK(header == "instrument,symbol,ts,example_features.spread,example_features.mid,example_features.buy_vol,example_features.sell_vol,example_features.trades");
         std::vector<std::string> rows;
         while (std::getline(in, line)) rows.push_back(line);
-        CHECK(rows.size() == 5);
-        CHECK(rows[0].rfind("1,AAA,1000000000,0.2", 0) == 0 && Has(rows[0], ",2,0,1"));
-        CHECK(rows[1].rfind("1,AAA,2000000000,", 0) == 0);
-        CHECK(rows[2].rfind("1,AAA,3000000000,", 0) == 0);
-        CHECK(rows[3].rfind("2,BBB,1000000000,", 0) == 0 && Has(rows[3], "nan"));
-        CHECK(rows[4].rfind("2,BBB,2000000000,0.1", 0) == 0);
+        CHECK(rows.size() == 4);
+        CHECK(rows[0].rfind("1,SYN1,5,", 0) == 0 && rows[1].rfind("1,SYN1,9,", 0) == 0);
+        CHECK(rows[2].rfind("2,SYN2,6,", 0) == 0 && rows[3].rfind("2,SYN2,10,", 0) == 0);
     }
     {
         std::ifstream in(out / "t.csv");
@@ -210,46 +188,38 @@ static int TestRunCli(const fs::path& tmp) {
         std::getline(in, header);
         std::vector<std::string> rows;
         while (std::getline(in, line)) rows.push_back(line);
-        CHECK(rows.size() == 1 && rows[0].rfind("1,AAA,500000001,", 0) == 0);
+        CHECK(rows.empty());
     }
 
     const fs::path pq = tmp / "pq";
-    r = Run("run " + adapter + " --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --sampler 1s=time:1s --sampler t=trades:1 --row-group 2 --out-dir " + Quote(pq), tmp);
+    r = Run("run " + adapter + plugin + " --row-group 2 --out-dir " + Quote(pq), tmp);
     CHECK(r.code == 0);
-    CHECK(Has(r.err, "writer  rows=6 stalls=") && !Has(r.err, "error="));
-    CHECK(fs::exists(pq / "1s.parquet") && fs::exists(pq / "t.parquet") && fs::exists(pq / "instruments.parquet"));
+    CHECK(Has(r.err, "writer  rows=4 stalls=") && !Has(r.err, "error="));
+    CHECK(fs::exists(pq / "e.parquet") && fs::exists(pq / "t.parquet") && fs::exists(pq / "instruments.parquet"));
     CHECK(Has(r.err, "wrote ") && Has(r.err, "instruments.parquet"));
-    CHECK(ParquetRows(pq / "1s.parquet") == 5 && ParquetRows(pq / "t.parquet") == 1 && ParquetRows(pq / "instruments.parquet") == 2);
-    r = Run("run " + adapter + " --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --sampler 1s=time:1s --out-dir " + Quote(tmp / "plugins" / "notes.txt" / "x"), tmp);
+    CHECK(ParquetRows(pq / "e.parquet") == 4 && ParquetRows(pq / "t.parquet") == 0 && ParquetRows(pq / "instruments.parquet") == 2);
+    r = Run("run " + adapter + plugin + " --out-dir " + Quote(tmp / "plugins" / "notes.txt" / "x"), tmp);
     CHECK(r.code == 8);
 
     r = Run("check-feed " + adapter, tmp);
-    CHECK(r.code == 0 && Has(r.err, "feed  events=7 instruments=2") && Has(r.err, "trades=1"));
+    CHECK(r.code == 0 && Has(r.err, "feed  events=10 instruments=2") && Has(r.err, "adds=10"));
 
     const fs::path adir = tmp / "adapter";
     fs::create_directories(adir);
-    fs::copy_file(NQ_REPLAY_ADAPTER_PATH, adir / "replay.so", fs::copy_options::overwrite_existing);
-    { std::ofstream(adir / "replay.params") << "path=" << fixture.string() << "\n"; }
-    r = Run("check-feed --adapter " + Quote(adir / "replay.so"), tmp);
+    fs::copy_file(NQ_SYNTHETIC_ADAPTER_PATH, adir / "synthetic.so", fs::copy_options::overwrite_existing);
+    { std::ofstream(adir / "synthetic.params") << "count=7\n"; }
+    r = Run("check-feed --adapter " + Quote(adir / "synthetic.so"), tmp);
     CHECK(r.code == 0 && Has(r.err, "events=7"));
-    r = Run("check-feed --adapter " + Quote(adir / "replay.so") + " --adapter-param path=" + Quote(tmp / "absent.mbo"), tmp);
-    CHECK(r.code == 4 && Has(r.err, "nq_adapter_init failed"));
+    r = Run("check-feed --adapter " + Quote(adir / "synthetic.so") + " --adapter-param count=3", tmp);
+    CHECK(r.code == 0 && Has(r.err, "events=3"));
 
-    r = Run("check-feed --adapter " + Quote(NQ_REPLAY_ADAPTER_PATH), tmp);
+    r = Run("check-feed --adapter " + Quote(NQ_SYNTHETIC_ADAPTER_PATH), tmp);
     CHECK(r.code == 4 && Has(r.err, "nq_adapter_init failed"));
     r = Run("check-feed " + adapter + " --adapter-param novalue", tmp);
     CHECK(r.code == 6);
     r = Run("check-feed --adapter " + Quote(NQ_EXAMPLE_FEATURES_PATH), tmp);
     CHECK(r.code == 2 && Has(r.err, "missing symbol"));
-
-    const fs::path truncated = tmp / "truncated.mbo";
-    {
-        std::ifstream in(fixture, std::ios::binary);
-        std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        std::ofstream o(truncated, std::ios::binary);
-        o.write(bytes.data(), static_cast<std::streamsize>(bytes.size() - 3));
-    }
-    r = Run("check-feed --adapter " + Quote(NQ_REPLAY_ADAPTER_PATH) + " --adapter-param path=" + Quote(truncated), tmp);
+    r = Run("check-feed " + adapter + " --adapter-param fail_after=6", tmp);
     CHECK(r.code == 7 && Has(r.err, "events=6") && Has(r.err, "adapter ended with status -2"));
     return 0;
 }
