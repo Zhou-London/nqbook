@@ -10,6 +10,7 @@
 
 #include <nlib/common.h>
 
+#include <Clock/TimerQueue.h>
 #include <Defaults.h>
 #include <Feature/FeatureCatalog.h>
 #include <Pipeline.h>
@@ -38,6 +39,7 @@ public:
 
     struct Entry {
         std::uint32_t id = 0;
+        std::uint32_t live_index = 0;
         std::unique_ptr<Pipeline> pipeline;
         InstrumentStats stats;
     };
@@ -72,6 +74,7 @@ private:
     RowSink* sink_;
     std::vector<Entry> entries_;
     std::vector<Pipeline*> live_;
+    TimerQueue timers_;
     FeedStats stats_;
 };
 

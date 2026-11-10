@@ -31,6 +31,7 @@ struct RunResult {
 
 class Session {
 public:
+    /* ---------- CTR/DTRs ---------- */
     Session(const FeatureCatalog& catalog, const host::AdapterPlugin& adapter, const nq_params& adapter_params,
             std::unique_ptr<ParquetWriter> writer = nullptr,
             std::size_t queue_capacity = defaults::kQueueCapacity,
@@ -39,14 +40,17 @@ public:
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
 
+    /* ---------- Member Functions ---------- */
     RunResult Run(const std::atomic<bool>& stop, std::size_t batch = defaults::kConsumeBatch);
 
+    /* ---------- Getters ---------- */
     PipelineTable& Pipelines() noexcept { return table_; }
     const PipelineTable& Pipelines() const noexcept { return table_; }
     const AdapterEngine& Adapter() const noexcept { return adapter_; }
     const WriterEngine* Writer() const noexcept { return writer_ ? &*writer_ : nullptr; }
 
 private:
+    /* ---------- Internal States ---------- */
     AdapterEngine adapter_;
     std::optional<WriterEngine> writer_;
     PipelineTable table_;

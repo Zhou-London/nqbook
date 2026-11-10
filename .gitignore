@@ -4,3 +4,4 @@ build/
 shared/nlib/
 shared/nqcppsdk/
 dist/
+out/

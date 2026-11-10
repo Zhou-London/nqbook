@@ -78,7 +78,12 @@ int main() {
             while (!q.try_push(Add(1, 0, i, i % 2 ? NQ_BID : NQ_ASK, 1000 + (i % 7), 1))) {}
     });
     std::size_t drained = 0;
-    while (drained < 10000) drained += ob2.Consume(q);
+    while (drained < 10000) {
+        if (auto m = q.try_pop()) {
+            ob2.Apply(*m);
+            ++drained;
+        }
+    }
     producer.join();
     CHECK(ob2.OrderCount() == 10000 && ob2.LastTs() == 1);
 

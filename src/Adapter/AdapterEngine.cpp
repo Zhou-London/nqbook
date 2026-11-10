@@ -29,10 +29,12 @@ std::optional<Instrument> AdapterEngine::FindInstrument(std::uint32_t id) const 
 
 void AdapterEngine::Discover(std::uint32_t id) {
     if (!seen_.insert(id).second) return;
+    
     std::optional<Instrument> found;
     if (auto i = adapter_.Instrument(id)) {
         found = Instrument{id, i->symbol ? i->symbol : "", i->tick_size, i->lot_size};
     }
+    
     std::lock_guard lock(mu_);
     instruments_.emplace(id, std::move(found));
 }
@@ -41,18 +43,22 @@ bool AdapterEngine::Push(nq_mbo m, const std::stop_token& st) noexcept {
     bool stalled = false;
     while (!queue_.try_push(std::move(m))) {
         if (st.stop_requested()) return false;
+        
         if (!stalled) {
             stalled = true;
             stalls_.fetch_add(1, std::memory_order_relaxed);
         }
+        
         std::this_thread::yield();
     }
+    
     pushed_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
 void AdapterEngine::Run(std::stop_token st) {
     nq_mbo m;
+    
     while (!st.stop_requested()) {
         const int rc = adapter_.Next(m);
         if (rc == NQ_NEXT_EVENT) {
@@ -64,6 +70,7 @@ void AdapterEngine::Run(std::stop_token st) {
             std::this_thread::yield();
             continue;
         }
+        
         status_.store(rc == NQ_NEXT_END ? 0 : rc, std::memory_order_relaxed);
         ended_.store(true, std::memory_order_release);
         return;

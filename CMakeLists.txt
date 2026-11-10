@@ -38,6 +38,7 @@ find_package(Arrow REQUIRED CONFIG)
 find_package(Parquet REQUIRED CONFIG)
 
 add_library(nqbook_core STATIC
+    src/Clock/TimerQueue.cpp
     src/Orderbook.cpp
     src/Config.cpp
     src/Feature/OrderbookView.cpp

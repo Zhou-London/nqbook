@@ -123,29 +123,9 @@ static int TestPipeline() {
     return 0;
 }
 
-static int TestQueueDrain() {
-    nq::FeatureCatalog catalog;
-    catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "test");
-    catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
-    nq::Pipeline pipe(catalog, nq::Instrument{0, "TEST", 1, 1});
-    nq::Sampler& bars = pipe.Engine().GetSampler(0);
-
-    nq::Orderbook::Queue q(64);
-    CHECK(q.try_push(Add(Sec(0.1), 0, 1, NQ_BID, P(10), Q(1))));
-    CHECK(q.try_push(Add(Sec(0.2), 0, 2, NQ_ASK, P(11), Q(1))));
-    CHECK(q.try_push(Trade(Sec(1.1), 0, 2, NQ_ASK, P(11), Q(1))));
-    CHECK(pipe.Consume(q) == 3);
-    CHECK(bars.Rows().RowCount() == 1 && RowIs(bars.Rows(), 0, Sec(1.0), 1.0, 10.5, 0, 0, 0));
-    CHECK(pipe.Book().BestAsk() == nullptr);
-    pipe.Close();
-    CHECK(bars.Rows().RowCount() == 2 && RowIs(bars.Rows(), 1, Sec(2.0), NAN, NAN, 1, 0, 1));
-    return 0;
-}
-
 int main() {
     if (int r = TestAdapter()) return r;
     if (int r = TestPipeline()) return r;
-    if (int r = TestQueueDrain()) return r;
     std::printf("ok\n");
     return 0;
 }

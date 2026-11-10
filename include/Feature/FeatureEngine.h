@@ -28,6 +28,7 @@ public:
     FeatureEngine& operator=(const FeatureEngine&) = delete;
 
     void Advance(std::int64_t ts);
+    std::int64_t Due() const noexcept;
     void OnEvent(const nq_mbo& m, nlib::qty_t filled);
     void Close();
 

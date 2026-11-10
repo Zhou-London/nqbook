@@ -1,4 +1,5 @@
 #include <atomic>
+#include <concepts>
 #include <csignal>
 #include <cstdio>
 #include <memory>
@@ -20,6 +21,7 @@
 
 namespace {
 
+/* ---------- Exit Code Handling ---------- */
 enum ExitCode : int {
     kOk = 0,
     kPluginLoad = 2,
@@ -32,10 +34,25 @@ enum ExitCode : int {
     kInterrupted = 130,
 };
 
-std::atomic<bool> g_stop{false};
+int ExitCodeFor(const std::exception& e, int fallback) {
+    if (dynamic_cast<const nq::host::AbiMismatchError*>(&e)) return kAbiMismatch;
+    if (dynamic_cast<const nq::host::PluginInitError*>(&e)) return kPluginInit;
+    if (dynamic_cast<const nq::host::PluginLoadError*>(&e)) return kPluginLoad;
+    if (dynamic_cast<const nq::host::PluginError*>(&e)) return kAdapterFailed;
+    return fallback;
+}
 
-void OnSignal(int) { g_stop.store(true, std::memory_order_relaxed); }
+int Attempt(int fallback, std::invocable auto&& step) {
+    try {
+        step();
+        return kOk;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "nqbook: %s\n", e.what());
+        return ExitCodeFor(e, fallback);
+    }
+}
 
+/* ---------- CLI Options ---------- */
 struct PluginOptions {
     std::vector<std::string> plugins;
     std::string plugin_dir;
@@ -50,7 +67,7 @@ struct AdapterOptions {
 };
 
 struct OutputOptions {
-    std::string dir;
+    std::string dir{nq::defaults::kOutDir};
     std::string format = "parquet";
     std::int64_t row_group_rows = nq::defaults::kRowGroupRows;
 };
@@ -62,37 +79,19 @@ void AddPluginOptions(CLI::App* cmd, PluginOptions& opt) {
     cmd->add_flag("--fill-gaps", opt.fill_gaps, "Time samplers emit a row for every empty bar");
 }
 
-void AddOutputOptions(CLI::App* cmd, OutputOptions& opt) {
-    cmd->add_option("--out-dir", opt.dir, "Directory that receives one file per sampler plus instruments.parquet");
-    cmd->add_option("--out-format", opt.format, "Output format")->check(CLI::IsMember({"parquet", "csv"}));
-    cmd->add_option("--row-group", opt.row_group_rows, "Rows per Parquet row group")->check(CLI::PositiveNumber);
-}
-
 void AddAdapterOptions(CLI::App* cmd, AdapterOptions& opt) {
     cmd->add_option("--adapter", opt.adapter, "Adapter .so that produces the mbo stream")->required()->check(CLI::ExistingFile);
     cmd->add_option("--adapter-param", opt.params, "KEY=VALUE for the adapter, after its .params file; repeatable");
     cmd->add_option("--queue-capacity", opt.queue_capacity, "Adapter-to-book queue capacity, rounded up to a power of two")->check(CLI::PositiveNumber);
 }
 
-int ExitCodeFor(const std::exception& e, int fallback) {
-    if (dynamic_cast<const nq::host::AbiMismatchError*>(&e)) return kAbiMismatch;
-    if (dynamic_cast<const nq::host::PluginInitError*>(&e)) return kPluginInit;
-    if (dynamic_cast<const nq::host::PluginLoadError*>(&e)) return kPluginLoad;
-    if (dynamic_cast<const nq::host::PluginError*>(&e)) return kAdapterFailed;
-    return fallback;
+void AddOutputOptions(CLI::App* cmd, OutputOptions& opt) {
+    cmd->add_option("--out-dir", opt.dir, "Directory that receives one file per sampler plus instruments.parquet")->capture_default_str();
+    cmd->add_option("--out-format", opt.format, "Output format")->check(CLI::IsMember({"parquet", "csv"}));
+    cmd->add_option("--row-group", opt.row_group_rows, "Rows per Parquet row group")->check(CLI::PositiveNumber);
 }
 
-template <typename Step>
-int Attempt(int fallback, Step&& step) {
-    try {
-        step();
-        return kOk;
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "nqbook: %s\n", e.what());
-        return ExitCodeFor(e, fallback);
-    }
-}
-
+/* ---------- Pipeline Assembling ---------- */
 int LoadCatalog(const PluginOptions& opt, nq::FeatureCatalog& catalog) {
     std::vector<nq::SamplerSpec> specs;
     if (int rc = Attempt(kSamplerInvalid, [&] {
@@ -133,6 +132,12 @@ int ParseAdapterParams(const AdapterOptions& opt, nq::ParamsBuilder& pb) {
     });
 }
 
+/* ----------- Signal Handling ---------- */
+std::atomic<bool> g_stop{false};
+
+void OnSignal(int) { g_stop.store(true, std::memory_order_relaxed); }
+
+/* ---------- Subcommands ---------- */
 int Check(const PluginOptions& popt, const std::string& format) {
     nq::FeatureCatalog catalog;
     if (int rc = LoadCatalog(popt, catalog)) return rc;
@@ -199,6 +204,20 @@ int Run(const PluginOptions& popt, const AdapterOptions& aopt, const OutputOptio
     return kOk;
 }
 
+int PrintHelp(CLI::App& app, const std::string& topic) {
+    if (topic.empty()) {
+        std::printf("%s", app.get_formatter()->make_help(&app, app.get_name(), CLI::AppFormatMode::Normal).c_str());
+        return kOk;
+    }
+    try {
+        std::printf("%s", app.get_subcommand(topic)->help(app.get_name()).c_str());
+        return kOk;
+    } catch (const CLI::OptionNotFound&) {
+        std::fprintf(stderr, "nqbook: unknown subcommand '%s'\n", topic.c_str());
+        return static_cast<int>(CLI::ExitCodes::OptionNotFound);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -229,19 +248,7 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    if (help->parsed()) {
-        if (help_topic.empty()) {
-            std::printf("%s", app.get_formatter()->make_help(&app, app.get_name(), CLI::AppFormatMode::Normal).c_str());
-            return kOk;
-        }
-        try {
-            std::printf("%s", app.get_subcommand(help_topic)->help(app.get_name()).c_str());
-            return kOk;
-        } catch (const CLI::OptionNotFound&) {
-            std::fprintf(stderr, "nqbook: unknown subcommand '%s'\n", help_topic.c_str());
-            return static_cast<int>(CLI::ExitCodes::OptionNotFound);
-        }
-    }
+    if (help->parsed()) return PrintHelp(app, help_topic);
     if (check->parsed()) return Check(check_plugins, check_format);
     if (run->parsed()) return Run(run_plugins, run_adapter, run_output, false);
     if (feed->parsed()) return Run(PluginOptions{}, feed_adapter, OutputOptions{}, true);

@@ -10,6 +10,7 @@ namespace nq {
 
 namespace {
 
+/* ---------- Parsing Helpers ---------- */
 std::string_view Trim(std::string_view s) {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r')) s.remove_prefix(1);
     while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) s.remove_suffix(1);
@@ -31,8 +32,10 @@ std::int64_t ParseDuration(std::string_view text) {
     std::size_t i = 0;
     while (i < text.size() && text[i] >= '0' && text[i] <= '9') ++i;
     if (i == 0) throw std::invalid_argument("duration must start with digits: '" + std::string(text) + "'");
+    
     std::int64_t value = 0;
     std::from_chars(text.data(), text.data() + i, value);
+    
     const std::string_view unit = text.substr(i);
     std::int64_t scale = 0;
     if (unit == "ns") scale = 1;
@@ -42,7 +45,9 @@ std::int64_t ParseDuration(std::string_view text) {
     else if (unit == "m") scale = 60'000'000'000;
     else if (unit == "h") scale = 3'600'000'000'000;
     else throw std::invalid_argument("duration needs a unit (ns, us, ms, s, m, h): '" + std::string(text) + "'");
+    
     if (value <= 0) throw std::invalid_argument("duration must be positive: '" + std::string(text) + "'");
+    
     return value * scale;
 }
 
@@ -68,6 +73,7 @@ SamplerSpec ParseSamplerSpec(std::string_view text) {
 KeyValues LoadParamsFile(const std::filesystem::path& path) {
     std::ifstream in(path);
     if (!in) throw std::invalid_argument("cannot open params file: " + path.string());
+    
     KeyValues out;
     std::string line;
     std::size_t lineno = 0;
@@ -75,10 +81,12 @@ KeyValues LoadParamsFile(const std::filesystem::path& path) {
         ++lineno;
         const std::string_view t = Trim(line);
         if (t.empty() || t.front() == '#') continue;
+        
         const auto eq = t.find('=');
         if (eq == std::string_view::npos || eq == 0) {
             throw std::invalid_argument(path.string() + ":" + std::to_string(lineno) + ": expected key=value");
         }
+        
         out.emplace_back(std::string(Trim(t.substr(0, eq))), std::string(Trim(t.substr(eq + 1))));
     }
     return out;
@@ -87,8 +95,10 @@ KeyValues LoadParamsFile(const std::filesystem::path& path) {
 PluginFile DescribePluginFile(const std::filesystem::path& so) {
     PluginFile pf{so, so.stem().string(), {}};
     std::filesystem::path params = so;
+    
     params.replace_extension(".params");
     if (std::filesystem::is_regular_file(params)) pf.params = LoadParamsFile(params);
+    
     return pf;
 }
 
@@ -97,10 +107,13 @@ std::vector<PluginFile> ScanPluginDir(const std::filesystem::path& dir) {
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
         if (entry.is_regular_file() && entry.path().extension() == ".so") files.push_back(entry.path());
     }
+    
     std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) { return a.filename() < b.filename(); });
+    
     std::vector<PluginFile> out;
     out.reserve(files.size());
     for (const auto& f : files) out.push_back(DescribePluginFile(f));
+    
     return out;
 }
 

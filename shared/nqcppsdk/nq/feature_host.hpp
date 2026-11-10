@@ -90,6 +90,7 @@ public:
             fns_.on_event = Resolve<nq_on_event_fn>(NQ_SYM_ON_EVENT);
             fns_.read = Resolve<nq_read_fn>(NQ_SYM_READ);
             fns_.on_control = Resolve<nq_on_control_fn>(NQ_SYM_ON_CONTROL);
+            
             schema_ = fns_.describe();
             if (!schema_) throw PluginLoadError("nq_describe returned null: " + path);
             if (schema_->abi_hash != NQ_ABI_HASH) {

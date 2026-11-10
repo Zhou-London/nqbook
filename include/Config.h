@@ -19,8 +19,10 @@ struct PluginFile {
     KeyValues params;
 };
 
+/* ---------- Parsing Functions ---------- */
 std::int64_t ParseDuration(std::string_view text);
 SamplerSpec ParseSamplerSpec(std::string_view text);
+    
 KeyValues LoadParamsFile(const std::filesystem::path& path);
 PluginFile DescribePluginFile(const std::filesystem::path& so);
 std::vector<PluginFile> ScanPluginDir(const std::filesystem::path& dir);

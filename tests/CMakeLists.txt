@@ -16,6 +16,7 @@ function(nqbook_add_test name)
 endfunction()
 
 nqbook_add_test(orderbook_test orderbook_test.cpp)
+nqbook_add_test(sampling_test sampling_test.cpp)
 nqbook_add_test(engine_test engine_test.cpp)
 nqbook_add_test(pipeline_table_test pipeline_table_test.cpp)
 nqbook_add_test(adapter_engine_test adapter_engine_test.cpp)

@@ -4,6 +4,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <arrow/api.h>
@@ -138,6 +139,19 @@ static int TestWriterEngine(const nq::FeatureCatalog& catalog, const fs::path& t
     return 0;
 }
 
+static int TestWriterEngineLastRow(const nq::FeatureCatalog& catalog, const fs::path& tmp) {
+    const fs::path dir = tmp / "last_row";
+    for (int i = 0; i < 2000; ++i) {
+        nq::WriterEngine engine(std::make_unique<nq::ParquetWriter>(catalog, dir, nq::ParquetOptions{100}), 4);
+        engine.Start();
+        for (int spin = 0; spin < i % 64; ++spin) std::this_thread::yield();
+        engine.Push(Row(0, 1, kSec, {1.0, 2.0, 3.0, 0.0, 0.0}));
+        engine.Finish({});
+        CHECK(engine.Written() == 1);
+    }
+    return 0;
+}
+
 int main() {
     const fs::path tmp = fs::temp_directory_path() / "nqbook_writer_test";
     fs::remove_all(tmp);
@@ -150,6 +164,7 @@ int main() {
 
     if (int r = TestParquetWriter(catalog, tmp)) return r;
     if (int r = TestWriterEngine(catalog, tmp)) return r;
+    if (int r = TestWriterEngineLastRow(catalog, tmp)) return r;
     fs::remove_all(tmp);
     std::printf("ok\n");
     return 0;

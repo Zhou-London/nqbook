@@ -81,6 +81,51 @@ static int TestMarket() {
     return 0;
 }
 
+static int TestIdleBars() {
+    nq::FeatureCatalog catalog;
+    catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "test");
+    catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
+    catalog.AddSampler(nq::SamplerSpec::Time("1s_fill", kSec).FillGaps());
+
+    nq::PipelineTable table(catalog, &Resolve, 16, 4);
+    table.Apply(Add(Sec(0.5), 2, 1, NQ_BID, P(50.00), Q(1)));
+    table.Apply(Add(Sec(0.6), 1, 1, NQ_BID, P(100.00), Q(1)));
+    table.Apply(Add(Sec(1.5), 1, 2, NQ_BID, P(100.00), Q(1)));
+    table.Apply(Add(Sec(2.5), 1, 3, NQ_BID, P(100.00), Q(1)));
+    table.Apply(Add(Sec(3.5), 1, 4, NQ_BID, P(100.00), Q(1)));
+    table.Apply(Add(Sec(3.7), 2, 2, NQ_BID, P(50.00), Q(1)));
+    table.Apply(Add(Sec(4.5), 1, 5, NQ_BID, P(100.00), Q(1)));
+    table.Close();
+
+    const nq::RowBuffer& a = table.Find(1)->Engine().GetSampler(0).Rows();
+    const nq::RowBuffer& b = table.Find(2)->Engine().GetSampler(0).Rows();
+    const nq::RowBuffer& b_fill = table.Find(2)->Engine().GetSampler(1).Rows();
+    CHECK(a.RowCount() == 5 && a.Ts(0) == kSec && a.Ts(4) == 5 * kSec);
+    CHECK(b.RowCount() == 2 && b.Ts(0) == kSec && b.Ts(1) == 4 * kSec);
+    CHECK(b_fill.RowCount() == 5 && b_fill.Ts(1) == 2 * kSec && b_fill.Ts(4) == 5 * kSec);
+    return 0;
+}
+
+static int TestQueueDrain() {
+    nq::FeatureCatalog catalog;
+    catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "test");
+    catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
+    nq::PipelineTable table(catalog, &Resolve, 16, 4);
+
+    nq::Orderbook::Queue q(64);
+    CHECK(q.try_push(Add(Sec(0.1), 1, 1, NQ_BID, P(10), Q(1))));
+    CHECK(q.try_push(Add(Sec(0.2), 1, 2, NQ_ASK, P(11), Q(1))));
+    CHECK(q.try_push(Trade(Sec(1.1), 1, 2, NQ_ASK, P(11), Q(1))));
+    CHECK(table.Consume(q) == 3 && q.empty());
+    const nq::Pipeline& pipe = *table.Find(1);
+    const nq::RowBuffer& bars = pipe.Engine().GetSampler(0).Rows();
+    CHECK(bars.RowCount() == 1 && RowIs(bars, 0, Sec(1.0), 1.0, 10.5, 0, 0, 0));
+    CHECK(pipe.Book().BestAsk() == nullptr);
+    table.Close();
+    CHECK(bars.RowCount() == 2 && RowIs(bars, 1, Sec(2.0), NAN, NAN, 1, 0, 1));
+    return 0;
+}
+
 static int TestSession() {
     nq::FeatureCatalog catalog;
     catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "test");
@@ -117,6 +162,8 @@ static int TestSession() {
 
 int main() {
     if (int r = TestMarket()) return r;
+    if (int r = TestIdleBars()) return r;
+    if (int r = TestQueueDrain()) return r;
     if (int r = TestSession()) return r;
     std::printf("ok\n");
     return 0;

@@ -1,5 +1,7 @@
 #include <Feature/FeatureEngine.h>
 
+#include <algorithm>
+
 #include <nq/params.hpp>
 
 namespace nq {
@@ -48,6 +50,12 @@ void FeatureEngine::Advance(std::int64_t ts) {
     for (auto& s : samplers_) s->Advance(ts, [this] { return ReadAll(); });
 }
 
+std::int64_t FeatureEngine::Due() const noexcept {
+    std::int64_t due = TimerQueue::kNever;
+    for (const auto& s : samplers_) due = std::min(due, s->Due());
+    return due;
+}
+
 void FeatureEngine::Close() {
     for (auto& s : samplers_) s->Close([this] { return ReadAll(); });
 }
@@ -63,9 +71,7 @@ void FeatureEngine::OnEvent(const nq_mbo& m, nlib::qty_t filled) {
                          static_cast<std::uint8_t>(m.side), static_cast<std::uint8_t>(m.action)};
         for (auto& inst : instances_) inst.OnEvent(e, view_.View());
     }
-    for (auto& s : samplers_) {
-        if (s->OnEvent(m.ts, m.action)) s->Emit(m.ts, ReadAll());
-    }
+    for (auto& s : samplers_) s->OnEvent(m.ts, m.action, [this] { return ReadAll(); });
 }
 
 }  // namespace nq

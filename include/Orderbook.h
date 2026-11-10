@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <limits>
 #include <map>
 #include <memory>
 #include <vector>
@@ -47,7 +46,6 @@ public:
 
     // Feed Handlers
     nlib::qty_t Apply(const nq_mbo& m);
-    std::size_t Consume(Queue& q, std::size_t max = std::numeric_limits<std::size_t>::max());
 
     void OnOrder(const nq_mbo& m);
     void OnCancel(const nq_mbo& m);

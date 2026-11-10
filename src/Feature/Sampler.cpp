@@ -4,9 +4,23 @@
 
 namespace nq {
 
+namespace {
+
+AnyTrigger MakeTrigger(const SamplerSpec& spec) {
+    switch (spec.trigger) {
+        case Trigger::Time: return BarTrigger(spec.every, spec.fill_gaps);
+        case Trigger::Events: return CountTrigger(spec.every, false);
+        case Trigger::Trades: return CountTrigger(spec.every, true);
+    }
+    return CountTrigger(spec.every, false);
+}
+
+}  // namespace
+
 Sampler::Sampler(SamplerSpec spec, std::vector<std::string> names, std::vector<SamplerColumn> columns,
                  RowSink* sink, std::uint32_t sampler_index, std::uint32_t instrument)
     : spec_(std::move(spec)),
+      trigger_(MakeTrigger(spec_)),
       columns_(std::move(columns)),
       rows_(std::move(names)),
       last_(columns_.size(), 0.0),
@@ -14,22 +28,6 @@ Sampler::Sampler(SamplerSpec spec, std::vector<std::string> names, std::vector<S
       sink_(sink),
       sampler_index_(sampler_index),
       instrument_(instrument) {}
-
-bool Sampler::OnEvent(std::int64_t ts, std::uint8_t a) noexcept {
-    last_ts_ = ts;
-    switch (spec_.trigger) {
-        case Trigger::Events: break;
-        case Trigger::Trades:
-            if (a != NQ_TRADE) return false;
-            break;
-        case Trigger::Time:
-            dirty_ = true;
-            return false;
-    }
-    if (++count_ < spec_.every) return false;
-    count_ = 0;
-    return true;
-}
 
 void Sampler::Emit(std::int64_t ts, std::span<const double> values) {
     for (std::size_t i = 0; i < columns_.size(); ++i) {
@@ -43,7 +41,6 @@ void Sampler::Emit(std::int64_t ts, std::span<const double> values) {
     }
     if (sink_) sink_->Push(FeatureRow{sampler_index_, instrument_, ts, row_});
     else rows_.Push(ts, row_);
-    dirty_ = false;
 }
 
 void Sampler::ResetBaseline() noexcept {

@@ -26,10 +26,11 @@ struct Result {
     std::string err;
 };
 
-static Result Run(const std::string& args, const fs::path& tmp) {
+static Result Run(const std::string& args, const fs::path& tmp, const fs::path& cwd = {}) {
     const fs::path out = tmp / "stdout.txt";
     const fs::path err = tmp / "stderr.txt";
-    const std::string cmd = Quote(NQBOOK_PATH) + " " + args + " >" + Quote(out) + " 2>" + Quote(err);
+    const std::string cd = cwd.empty() ? "" : "cd " + Quote(cwd) + " && ";
+    const std::string cmd = cd + Quote(NQBOOK_PATH) + " " + args + " >" + Quote(out) + " 2>" + Quote(err);
     const int status = std::system(cmd.c_str());
     auto slurp = [](const fs::path& p) {
         std::ifstream in(p);
@@ -200,6 +201,14 @@ static int TestRunCli(const fs::path& tmp) {
     CHECK(ParquetRows(pq / "e.parquet") == 4 && ParquetRows(pq / "t.parquet") == 0 && ParquetRows(pq / "instruments.parquet") == 2);
     r = Run("run " + adapter + plugin + " --out-dir " + Quote(tmp / "plugins" / "notes.txt" / "x"), tmp);
     CHECK(r.code == 8);
+
+    const fs::path cwd = tmp / "cwd";
+    fs::create_directories(cwd);
+    r = Run("run " + adapter + plugin, tmp, cwd);
+    CHECK(r.code == 0 && Has(r.err, "wrote out/e.parquet"));
+    CHECK(ParquetRows(cwd / "out" / "e.parquet") == 4 && ParquetRows(cwd / "out" / "instruments.parquet") == 2);
+    r = Run("run --help", tmp);
+    CHECK(r.code == 0 && Has(r.out, "[out]"));
 
     r = Run("check-feed " + adapter, tmp);
     CHECK(r.code == 0 && Has(r.err, "feed  events=10 instruments=2") && Has(r.err, "adds=10"));

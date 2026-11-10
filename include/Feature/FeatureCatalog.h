@@ -32,13 +32,16 @@ struct SamplerTemplate {
 
 class FeatureCatalog {
 public:
+    /* ---------- CTR/DTRs ---------- */
     FeatureCatalog() = default;
     FeatureCatalog(const FeatureCatalog&) = delete;
     FeatureCatalog& operator=(const FeatureCatalog&) = delete;
 
+    /* ---------- Member Functions ---------- */
     std::size_t LoadPlugin(const std::string& path, std::string name = "", KeyValues params = {});
     void AddSampler(SamplerSpec spec);
 
+    /* ---------- Getters ---------- */
     std::size_t PluginCount() const noexcept { return plugins_.size(); }
     const host::Plugin& Plugin(std::size_t i) const noexcept { return plugins_[i]; }
     const std::string& PluginName(std::size_t i) const noexcept { return names_[i]; }
@@ -51,6 +54,7 @@ public:
 private:
     std::size_t FindColumn(std::string_view name) const;
 
+    /* ---------- Internal States ---------- */
     std::vector<host::Plugin> plugins_;
     std::vector<std::string> names_;
     std::vector<KeyValues> params_;

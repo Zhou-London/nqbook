@@ -28,6 +28,7 @@ PipelineTable::Entry& PipelineTable::Resolve(std::uint32_t instrument) {
         spec = Instrument{instrument, "#" + std::to_string(instrument), 1, 1};
     }
     entry.pipeline = std::make_unique<Pipeline>(*catalog_, std::move(*spec), expected_orders_, sink_);
+    entry.live_index = static_cast<std::uint32_t>(live_.size());
     live_.push_back(entry.pipeline.get());
     return entry;
 }
@@ -45,8 +46,16 @@ nlib::qty_t PipelineTable::Apply(const nq_mbo& m) {
     e.stats.last_ts = m.ts;
     ++e.stats.events;
 
-    for (Pipeline* p : live_) p->Engine().Advance(m.ts);
-    return e.pipeline->Apply(m);
+    timers_.AdvanceTo(m.ts, [&](std::uint32_t key) {
+        FeatureEngine& woken = live_[key]->Engine();
+        woken.Advance(m.ts);
+        timers_.WakeBy(key, woken.Due());
+    });
+    FeatureEngine& engine = e.pipeline->Engine();
+    engine.Advance(m.ts);
+    const nlib::qty_t filled = e.pipeline->Apply(m);
+    timers_.WakeBy(e.live_index, engine.Due());
+    return filled;
 }
 
 std::vector<Instrument> PipelineTable::Instruments() const {

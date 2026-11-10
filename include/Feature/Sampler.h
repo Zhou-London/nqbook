@@ -5,6 +5,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <nq/feature_abi.h>
@@ -12,6 +13,7 @@
 #include <Defaults.h>
 
 #include <Feature/RowBuffer.h>
+#include <Feature/Trigger.h>
 #include <Writer/RowSink.h>
 
 namespace nq {
@@ -60,47 +62,44 @@ public:
     RowBuffer& Rows() noexcept { return rows_; }
     std::size_t Ncol() const noexcept { return columns_.size(); }
 
+    std::int64_t Due() const noexcept {
+        if (const auto* bar = std::get_if<BarTrigger>(&trigger_)) return bar->Due();
+        return std::get_if<CountTrigger>(&trigger_)->Due();
+    }
+
+    template <typename Reader>
+    void OnEvent(std::int64_t ts, std::uint8_t action, Reader&& read) {
+        Visit([&](auto& t) { t.OnEvent(ts, action, Emitter(read)); });
+    }
+
     template <typename Reader>
     void Advance(std::int64_t ts, Reader&& read) {
-        if (spec_.trigger != Trigger::Time) return;
-        const std::int64_t interval = spec_.every;
-        if (!started_) {
-            started_ = true;
-            next_ = (ts / interval + 1) * interval;
-            return;
-        }
-        if (ts < next_) return;
-        const std::span<const double> values = read();
-        if (spec_.fill_gaps) {
-            while (ts >= next_) {
-                Emit(next_, values);
-                next_ += interval;
-            }
-            return;
-        }
-        Emit(next_, values);
-        next_ = (ts / interval + 1) * interval;
+        Visit([&](auto& t) { t.Advance(ts, Emitter(read)); });
     }
 
     template <typename Reader>
     void Close(Reader&& read) {
-        if (spec_.trigger == Trigger::Time) {
-            if (!started_ || !(dirty_ || spec_.fill_gaps)) return;
-            Emit(next_, read());
-            return;
-        }
-        if (count_ == 0) return;
-        count_ = 0;
-        Emit(last_ts_, read());
+        Visit([&](auto& t) { t.Close(Emitter(read)); });
     }
 
-    bool OnEvent(std::int64_t ts, std::uint8_t a) noexcept;
-
-    void Emit(std::int64_t ts, std::span<const double> values);
     void ResetBaseline() noexcept;
 
 private:
+    template <typename Fn>
+    void Visit(Fn&& fn) {
+        if (auto* bar = std::get_if<BarTrigger>(&trigger_)) fn(*bar);
+        else fn(*std::get_if<CountTrigger>(&trigger_));
+    }
+
+    template <typename Reader>
+    auto Emitter(Reader& read) {
+        return [this, &read](std::int64_t at) { Emit(at, read()); };
+    }
+
+    void Emit(std::int64_t ts, std::span<const double> values);
+
     SamplerSpec spec_;
+    AnyTrigger trigger_;
     std::vector<SamplerColumn> columns_;
     RowBuffer rows_;
     std::vector<double> last_;
@@ -108,11 +107,6 @@ private:
     RowSink* sink_;
     std::uint32_t sampler_index_;
     std::uint32_t instrument_;
-    std::int64_t next_ = 0;
-    bool started_ = false;
-    bool dirty_ = false;
-    std::int64_t last_ts_ = 0;
-    std::int64_t count_ = 0;
 };
 
 }  // namespace nq

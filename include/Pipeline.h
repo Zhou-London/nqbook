@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <limits>
 
 #include <nlib/common.h>
 
@@ -33,18 +32,6 @@ public:
     }
 
     void Close() { engine_.Close(); }
-
-    std::size_t Consume(Orderbook::Queue& q, std::size_t max = std::numeric_limits<std::size_t>::max()) {
-        std::size_t n = 0;
-        while (n < max) {
-            auto m = q.try_pop();
-            if (!m) break;
-            engine_.Advance(m->ts);
-            Apply(*m);
-            ++n;
-        }
-        return n;
-    }
 
 private:
     Orderbook book_;

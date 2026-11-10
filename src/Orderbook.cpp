@@ -20,17 +20,6 @@ nlib::qty_t Orderbook::Apply(const nq_mbo& m) {
     return 0;
 }
 
-std::size_t Orderbook::Consume(Queue& q, std::size_t max) {
-    std::size_t n = 0;
-    while (n < max) {
-        auto m = q.try_pop();
-        if (!m) break;
-        Apply(*m);
-        ++n;
-    }
-    return n;
-}
-
 void Orderbook::OnOrder(const nq_mbo& m) {
     ++stats_.adds;
     last_ts_ = m.ts;

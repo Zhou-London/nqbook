@@ -10,35 +10,54 @@
 
 # NQBook
 
-NQBook is an order book engine for MBO (market by order) data. It keeps one order book per instrument from a single market-wide event stream, reduces resting orders on trades without simulating a match, and turns the books into feature rows through plugins.
+NQBook builds one order book per instrument from an MBO event stream. Feature plugins turn the books into rows, and samplers write the rows to Parquet.
 
-- **Plugins, not rebuilds.** Data sources (adapters) and feature computations are `.so` files loaded at startup. NQBook never has to be recompiled to add one.
-- **Agent-safe plugin SDK.** Plugins see a small C ABI and a header-only C++ layer, [NQCPPSDK](https://github.com/Zhou-London/nqcppsdk). They never see engine code, and an SDK mismatch is refused at load time.
-- **Streaming features.** Every feature is incremental. Samplers read them on time bars, event counts, or trade counts, and cumulative columns serve every sampling rate from one state.
-- **Parquet out.** Rows stream to one Parquet file per sampler while the run proceeds, with a UTC nanosecond timestamp column and an instrument table.
-- **Feed validation.** `check-feed` replays any adapter through bare books and reports timestamp regressions, unknown orders, and over-filled trades.
+## Build and run
 
-## Thirty seconds
+Requires CMake 3.28, a C++23 compiler, and Apache Arrow with Parquet.
 
 ```bash
-cmake -S . -B build && cmake --build build -j
+cmake -S . -B build && cmake --build build -j && ctest --test-dir build
 build/nqbook run --adapter build/plugins/adapters/synthetic.so \
                  --adapter-param count=100000 --adapter-param instruments=3 \
                  --plugin-dir build/plugins/features \
-                 --sampler e=events:1000 \
-                 --out-dir out
+                 --sampler e=events:1000
 ```
 
-The report prints to stderr. `out/e.parquet` holds the feature rows and `out/instruments.parquet` the instrument table.
+`run` writes into `out/` under the current directory. `--out-dir` picks another directory. `nqbook help` lists the subcommands: `check`, `run`, and `check-feed`.
 
-## Documents
+## Architecture
 
-| Document | For | Contents |
+```
+adapter thread         main thread                          writer thread
+AdapterEngine          Session::Run                         WriterEngine
+  adapter.Next()  ──►    PipelineTable                        ParquetWriter
+                           per instrument: Pipeline
+                             Orderbook
+                             FeatureEngine
+                               plugins ─► Samplers  ──────►
+```
+
+- Two single-producer single-consumer queues connect the three threads. A full queue makes the producer wait.
+- `AdapterEngine` runs the adapter plugin on its own thread and caches instrument metadata.
+- `PipelineTable` maps each instrument id to a `Pipeline`, which holds an `Orderbook` and a `FeatureEngine`.
+- `Orderbook` keeps pooled orders in price levels and reduces resting orders on trades.
+- `FeatureEngine` calls the feature plugins on each event and passes their values to the samplers.
+- `WriterEngine` writes one Parquet file per sampler, plus `instruments.parquet`.
+
+Sampling has three layers. Each layer uses only the layer below it.
+
+| Layer | Class | Job |
 |---|---|---|
-| [docs/manual.md](docs/manual.md) | users and harnesses | getting started, every command and option, the semantics of bars, output, and exit codes |
-| [docs/development.md](docs/development.md) | people changing NQBook | source layout, threads and queues, build and test, dependency pins, release loop, performance baseline |
-| [NQCPPSDK manual](https://github.com/Zhou-London/nqcppsdk/blob/main/docs/manual.md) | plugin authors | how to write, build, and test a feature or adapter plugin, and the API reference |
+| clock | `Clock/TimerQueue` | Wakes a key when the event clock reaches its due time. Knows nothing about instruments or samplers |
+| trigger | `Feature/Trigger`: `BarTrigger`, `CountTrigger` | Decides when a row is due and calls `emit(ts)`. Pure logic: no plugins, no output |
+| row | `Feature/Sampler` | Reads feature values, turns cumulative columns into deltas, and pushes the row to the sink |
 
-## Requirements
+`PipelineTable` joins the layers. On each event it fires the due timers, applies the event to its own instrument, and schedules that instrument's next due time. An idle instrument costs nothing per event.
 
-CMake 3.28, a C++23 compiler, Apache Arrow with Parquet (`brew install apache-arrow` on macOS, `libarrow-dev libparquet-dev` on Debian and Ubuntu), and GitHub access on the first configure.
+| Path | Contents |
+|---|---|
+| `src/`, `include/` | the engine |
+| `plugins/` | the example feature plugin and the synthetic adapter |
+| `tests/` | one test executable per layer |
+| `shared/` | nlib and [NQCPPSDK](https://github.com/Zhou-London/nqcppsdk), fetched by CMake at the `GIT_TAG` pins |

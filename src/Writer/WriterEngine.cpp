@@ -53,20 +53,18 @@ std::string WriterEngine::Error() const {
 void WriterEngine::Run(std::stop_token st) {
     int idle = 0;
     for (;;) {
-        auto row = queue_.try_pop();
-        if (row) {
+        const bool last = draining_.load(std::memory_order_acquire) || st.stop_requested();
+        while (auto row = queue_.try_pop()) {
             idle = 0;
-            if (!failed_.load(std::memory_order_acquire)) {
-                try {
-                    writer_->Write(*row);
-                    written_.fetch_add(1, std::memory_order_relaxed);
-                } catch (const std::exception& e) {
-                    Fail(e.what());
-                }
+            if (failed_.load(std::memory_order_acquire)) continue;
+            try {
+                writer_->Write(*row);
+                written_.fetch_add(1, std::memory_order_relaxed);
+            } catch (const std::exception& e) {
+                Fail(e.what());
             }
-            continue;
         }
-        if (draining_.load(std::memory_order_acquire) || st.stop_requested()) return;
+        if (last) return;
         if (++idle < 64) std::this_thread::yield();
         else std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
