@@ -48,8 +48,6 @@ public:
     PipelineTable(const FeatureCatalog& catalog, Resolver resolver, PipelineOptions<Record> options = {},
                   std::size_t instrument_slots = defaults::kInstrumentSlots, RowSink* sink = nullptr);
 
-    std::vector<Instrument> Instruments() const;
-
     PipelineTable(const PipelineTable&) = delete;
     PipelineTable& operator=(const PipelineTable&) = delete;
 

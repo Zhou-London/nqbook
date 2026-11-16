@@ -59,7 +59,7 @@ AdapterEngine          Session::Run                         WriterEngine
 - `PipelineTable` maps each instrument id to a `Pipeline`. An MBO `Pipeline` holds an `Orderbook` and a `FeatureEngine`. An OHLCV `Pipeline` holds a `FeatureEngine` only.
 - `Orderbook` keeps pooled orders in price levels and reduces resting orders on trades.
 - `FeatureEngine` calls the feature plugins on each record and passes their values to the samplers.
-- `WriterEngine` writes one Parquet file per sampler, plus `instruments.parquet`.
+- `WriterEngine` writes one Parquet file per sampler, plus `instruments.parquet`. Each sampler row holds the instrument id and its symbol.
 
 Sampling has three layers. Each layer uses only the layer below it.
 
@@ -76,6 +76,6 @@ The `ts` of an OHLCV record is the start of its period. A `time` sampler with th
 | Path | Contents |
 |---|---|
 | `src/`, `include/` | the engine |
-| `plugins/` | one example feature plugin and one synthetic adapter per feed |
+| `plugins/` | one example feature plugin and one synthetic adapter per feed, the `nqlake_ohlcv` adapter, the `ta_ohlcv` feature plugin |
 | `tests/` | one test executable per layer |
 | `shared/` | nlib and [NQCPPSDK](https://github.com/Zhou-London/nqcppsdk), fetched by CMake at the `GIT_TAG` pins |

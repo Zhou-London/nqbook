@@ -22,17 +22,23 @@ void WriterEngine::Start() {
     thread_ = std::jthread([this](std::stop_token st) { Run(st); });
 }
 
+void WriterEngine::Register(const Instrument& instrument) { Enqueue(instrument); }
+
 void WriterEngine::Push(FeatureRow row) {
+    if (Enqueue(std::move(row))) pushed_.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool WriterEngine::Enqueue(Message message) {
     bool stalled = false;
-    while (!queue_.try_push(std::move(row))) {
-        if (abort_.load(std::memory_order_acquire) || failed_.load(std::memory_order_acquire)) return;
+    while (!queue_.try_push(std::move(message))) {
+        if (abort_.load(std::memory_order_acquire) || failed_.load(std::memory_order_acquire)) return false;
         if (!stalled) {
             stalled = true;
             stalls_.fetch_add(1, std::memory_order_relaxed);
         }
         std::this_thread::yield();
     }
-    pushed_.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 
 void WriterEngine::Abort() noexcept { abort_.store(true, std::memory_order_release); }
@@ -54,12 +60,16 @@ void WriterEngine::Run(std::stop_token st) {
     int idle = 0;
     for (;;) {
         const bool last = draining_.load(std::memory_order_acquire) || st.stop_requested();
-        while (auto row = queue_.try_pop()) {
+        while (auto message = queue_.try_pop()) {
             idle = 0;
             if (failed_.load(std::memory_order_acquire)) continue;
             try {
-                writer_->Write(*row);
-                written_.fetch_add(1, std::memory_order_relaxed);
+                if (const auto* row = std::get_if<FeatureRow>(&*message)) {
+                    writer_->Write(*row);
+                    written_.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    writer_->Register(std::get<Instrument>(*message));
+                }
             } catch (const std::exception& e) {
                 Fail(e.what());
             }
@@ -70,12 +80,11 @@ void WriterEngine::Run(std::stop_token st) {
     }
 }
 
-void WriterEngine::Finish(std::span<const Instrument> instruments) {
+void WriterEngine::Finish() {
     draining_.store(true, std::memory_order_release);
     if (thread_.joinable()) thread_.join();
     if (failed_.load(std::memory_order_acquire)) return;
     try {
-        writer_->WriteInstruments(instruments);
         writer_->Close();
     } catch (const std::exception& e) {
         Fail(e.what());

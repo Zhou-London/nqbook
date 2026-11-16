@@ -8,12 +8,13 @@ target_compile_definitions(nqhpc_tests INTERFACE
     NQ_SYNTHETIC_ADAPTER_PATH="$<TARGET_FILE:synthetic>"
     NQ_EXAMPLE_OHLCV_FEATURES_PATH="$<TARGET_FILE:example_ohlcv_features>"
     NQ_SYNTHETIC_OHLCV_ADAPTER_PATH="$<TARGET_FILE:synthetic_ohlcv>"
+    NQ_TA_OHLCV_PATH="$<TARGET_FILE:ta_ohlcv>"
 )
 
 function(nqhpc_add_test name)
     add_executable(${name} ${ARGN})
     target_link_libraries(${name} PRIVATE nqhpc_tests)
-    add_dependencies(${name} nqhpc example_features synthetic example_ohlcv_features synthetic_ohlcv)
+    add_dependencies(${name} nqhpc example_features synthetic example_ohlcv_features synthetic_ohlcv ta_ohlcv)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 

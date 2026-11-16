@@ -5,10 +5,10 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <span>
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <variant>
 
 #include <nlib/single_queue.h>
 #include <nq/instrument.hpp>
@@ -27,8 +27,9 @@ public:
     WriterEngine& operator=(const WriterEngine&) = delete;
 
     void Start();
+    void Register(const Instrument& instrument) override;
     void Push(FeatureRow row) override;
-    void Finish(std::span<const Instrument> instruments);
+    void Finish();
     void Abort() noexcept;
 
     const ParquetWriter& Writer() const noexcept { return *writer_; }
@@ -39,11 +40,14 @@ public:
     std::uint64_t Stalls() const noexcept { return stalls_.load(std::memory_order_relaxed); }
 
 private:
+    using Message = std::variant<FeatureRow, Instrument>;
+
+    bool Enqueue(Message message);
     void Run(std::stop_token st);
     void Fail(const std::string& message);
 
     std::unique_ptr<ParquetWriter> writer_;
-    nlib::single_queue<FeatureRow> queue_;
+    nlib::single_queue<Message> queue_;
     std::atomic<bool> draining_{false};
     std::atomic<bool> failed_{false};
     std::atomic<bool> abort_{false};

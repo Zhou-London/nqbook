@@ -61,16 +61,6 @@ void PipelineTable<Record>::Apply(const Record& record) {
 }
 
 template <class Record>
-std::vector<Instrument> PipelineTable<Record>::Instruments() const {
-    std::vector<Instrument> out;
-    out.reserve(live_.size());
-    for (const Entry& e : entries_) {
-        if (e.pipeline) out.push_back(e.pipeline->Engine().GetInstrument());
-    }
-    return out;
-}
-
-template <class Record>
 void PipelineTable<Record>::Close() {
     for (Pipeline<Record>* p : live_) p->Close();
 }

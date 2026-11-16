@@ -1,2 +1,4 @@
 nq_add_plugin(synthetic synthetic/synthetic_adapter.cpp)
 nq_add_plugin(synthetic_ohlcv synthetic_ohlcv/synthetic_ohlcv_adapter.cpp)
+nq_add_plugin(nqlake_ohlcv nqlake_ohlcv/nqlake_ohlcv_adapter.cpp)
+target_link_libraries(nqlake_ohlcv PRIVATE Arrow::arrow_shared)

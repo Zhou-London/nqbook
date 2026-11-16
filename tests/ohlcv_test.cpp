@@ -1,4 +1,6 @@
 #include <atomic>
+#include <cmath>
+#include <numbers>
 #include <optional>
 #include <stdexcept>
 
@@ -145,11 +147,53 @@ static int TestFeedRules() {
     return 0;
 }
 
+static int TestTechnicalAnalysis() {
+    nq::FeatureCatalog catalog;
+    catalog.LoadPlugin(NQ_TA_OHLCV_PATH, "ta");
+    CHECK(catalog.Columns().size() == 12 && catalog.Columns()[0].name == "ta.ret" && catalog.Columns()[11].name == "ta.rvol");
+    catalog.AddSampler(nq::SamplerSpec::Events("each", 1));
+
+    nq::Pipeline<nq_ohlcv> pipe(catalog, nq::Instrument{0, "TEST", 1, 1});
+    for (std::int64_t minute = 0; minute < 60; ++minute) {
+        pipe.Engine().Advance(minute * kMin);
+        pipe.Apply(Minute(minute, 0));
+    }
+    const nq::RowBuffer& each = pipe.Engine().GetSampler(0).Rows();
+    CHECK(each.RowCount() == 60);
+
+    const auto warming = each.Row(12);
+    CHECK(std::isnan(warming[4]) && std::isnan(warming[5]) && std::isnan(warming[6]) && std::isnan(warming[7]));
+    CHECK(Near(warming[8], 100) && std::isnan(warming[10]) && std::isnan(warming[11]));
+
+    const auto last = each.Row(59);
+    const double ret = std::log(160.0 / 159.0);
+    const double log_range = std::log(161.0 / 158.0);
+    CHECK(Near(last[0], ret) && Near(last[1], 0) && Near(last[2], ret * ret));
+    CHECK(Near(last[3], 0.5 * log_range * log_range - (2 * std::numbers::ln2 - 1) * ret * ret));
+    CHECK(Near(last[4], 3.0 / 160.0) && Near(last[5], 9.5 / 3.0) && Near(last[6], 100) && Near(last[7], 21.0 / 22.0));
+    CHECK(Near(last[8], 100) && Near(last[9], 2.0 / 3.0) && Near(last[10], 1) && Near(last[11], 30.5 / 25.25));
+
+    nq::FeatureCatalog rth_only;
+    rth_only.LoadPlugin(NQ_TA_OHLCV_PATH, "ta", {{"rth_only", "1"}});
+    rth_only.AddSampler(nq::SamplerSpec::Events("each", 1));
+    nq::Pipeline<nq_ohlcv> rth_pipe(rth_only, nq::Instrument{0, "TEST", 1, 1});
+    const std::int64_t ten_eastern = 15 * 60 * kMin;
+    for (std::int64_t minute = 0; minute < 3; ++minute) rth_pipe.Apply(Minute(minute, 0));
+    rth_pipe.Apply(Ohlcv(ten_eastern, 0, 200, 202, 199, 201, 1));
+    rth_pipe.Apply(Ohlcv(ten_eastern + kMin, 0, 201, 203, 200, 202, 1));
+    const nq::RowBuffer& rth_rows = rth_pipe.Engine().GetSampler(0).Rows();
+    CHECK(rth_rows.RowCount() == 5 && Near(rth_rows.Row(2)[0], 0) && std::isnan(rth_rows.Row(2)[9]));
+    CHECK(Near(rth_rows.Row(3)[0], 0) && Near(rth_rows.Row(3)[9], 2.0 / 3.0));
+    CHECK(Near(rth_rows.Row(4)[0], std::log(202.0 / 201.0)) && Near(rth_rows.Row(4)[1], 0));
+    return 0;
+}
+
 int main() {
     if (int r = TestPipeline()) return r;
     if (int r = TestTable()) return r;
     if (int r = TestSession()) return r;
     if (int r = TestFeedRules()) return r;
+    if (int r = TestTechnicalAnalysis()) return r;
     std::printf("ok\n");
     return 0;
 }

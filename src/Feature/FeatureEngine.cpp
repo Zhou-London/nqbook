@@ -21,6 +21,7 @@ FeatureEngine::FeatureEngine(const FeatureCatalog& catalog, Instrument spec, Row
         values_.resize(values_.size() + catalog.Plugin(i).Schema().ncol, 0.0);
         instances_.push_back(catalog.Plugin(i).Create(*pb.Build()));
     }
+    if (sink) sink->Register(spec_);
     for (std::size_t i = 0; i < catalog.Samplers().size(); ++i) {
         const auto& t = catalog.Samplers()[i];
         samplers_.push_back(std::make_unique<Sampler>(t.spec, t.names, t.columns, sink,

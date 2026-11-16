@@ -61,7 +61,7 @@ RunResult Session<Record>::Run(const std::atomic<bool>& stop, std::size_t batch)
     
     if (writer_) {
         result.has_writer = true;
-        writer_->Finish(table_.Instruments());
+        writer_->Finish();
         result.rows_written = writer_->Written();
         result.writer_stalls = writer_->Stalls();
         result.writer_error = writer_->Error();
