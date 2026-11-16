@@ -13,13 +13,11 @@
 #include <Defaults.h>
 #include <nlib/map.h>
 #include <nlib/memory_pool.h>
-#include <nlib/single_queue.h>
 
 namespace nq {
 
 class Orderbook {
 public:
-    using Queue = nlib::single_queue<nq_mbo>;
     using BidLevels = std::map<nlib::price_t, nlib::level, std::greater<nlib::price_t>>;
     using AskLevels = std::map<nlib::price_t, nlib::level, std::less<nlib::price_t>>;
 

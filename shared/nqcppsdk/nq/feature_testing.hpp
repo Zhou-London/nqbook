@@ -80,7 +80,12 @@ inline nq_event Clear(std::int64_t ts) noexcept {
     return MakeEvent(Action::Clear, ts, 0, Side::Bid, 0, 0);
 }
 
-template <FeatureType... Fs>
+inline nq_ohlcv MakeOhlcv(std::int64_t ts, std::int64_t open, std::int64_t high, std::int64_t low,
+                          std::int64_t close, double volume) noexcept {
+    return nq_ohlcv{ts, open, high, low, close, volume, 0};
+}
+
+template <class... Fs>
 class Sandbox {
 public:
     using BundleType = Bundle<Fs...>;
@@ -97,13 +102,20 @@ public:
         for (const auto& e : events) Feed(e);
     }
 
+    void Feed(const nq_ohlcv& ohlcv) noexcept { bundle_.OnOhlcv(ohlcv); }
+
+    void Feed(std::span<const nq_ohlcv> ohlcvs) noexcept {
+        for (const auto& ohlcv : ohlcvs) Feed(ohlcv);
+    }
+
     void Control(ControlType type, std::int64_t ts) noexcept {
         bundle_.OnControl(nq::Control(type, ts));
     }
 
     std::vector<double> Read() const {
         std::vector<double> out(BundleType::kNcol);
-        bundle_.Read(out, book_.View());
+        if constexpr (BundleType::kFeed == nq::Feed::MBO) bundle_.Read(out, book_.View());
+        else bundle_.Read(out);
         return out;
     }
 

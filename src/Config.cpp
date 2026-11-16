@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <charconv>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 
 namespace nq {
@@ -34,7 +35,7 @@ std::int64_t ParseDuration(std::string_view text) {
     if (i == 0) throw std::invalid_argument("duration must start with digits: '" + std::string(text) + "'");
     
     std::int64_t value = 0;
-    std::from_chars(text.data(), text.data() + i, value);
+    const std::errc ec = std::from_chars(text.data(), text.data() + i, value).ec;
     
     const std::string_view unit = text.substr(i);
     std::int64_t scale = 0;
@@ -46,6 +47,9 @@ std::int64_t ParseDuration(std::string_view text) {
     else if (unit == "h") scale = 3'600'000'000'000;
     else throw std::invalid_argument("duration needs a unit (ns, us, ms, s, m, h): '" + std::string(text) + "'");
     
+    if (ec == std::errc::result_out_of_range || value > std::numeric_limits<std::int64_t>::max() / scale) {
+        throw std::invalid_argument("duration is too large: '" + std::string(text) + "'");
+    }
     if (value <= 0) throw std::invalid_argument("duration must be positive: '" + std::string(text) + "'");
     
     return value * scale;

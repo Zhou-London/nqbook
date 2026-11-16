@@ -20,6 +20,7 @@ struct AdapterFns {
     nq_adapter_describe_fn describe = nullptr;
     nq_adapter_init_fn init = nullptr;
     nq_adapter_next_fn next = nullptr;
+    nq_adapter_next_ohlcv_fn next_ohlcv = nullptr;
     nq_adapter_instrument_fn instrument = nullptr;
     nq_adapter_destroy_fn destroy = nullptr;
 };
@@ -50,6 +51,7 @@ public:
     const nq_adapter_schema& Schema() const noexcept { return *schema_; }
 
     int Next(nq_mbo& out) noexcept { return fns_.next(state_, &out); }
+    int Next(nq_ohlcv& out) noexcept { return fns_.next_ohlcv(state_, &out); }
 
     std::optional<nq_instrument> Instrument(std::uint32_t id) const noexcept {
         nq_instrument out;
@@ -80,7 +82,6 @@ public:
         try {
             fns_.describe = Resolve<nq_adapter_describe_fn>(NQ_SYM_ADAPTER_DESCRIBE);
             fns_.init = Resolve<nq_adapter_init_fn>(NQ_SYM_ADAPTER_INIT);
-            fns_.next = Resolve<nq_adapter_next_fn>(NQ_SYM_ADAPTER_NEXT);
             fns_.instrument = Resolve<nq_adapter_instrument_fn>(NQ_SYM_ADAPTER_INSTRUMENT);
             fns_.destroy = Resolve<nq_adapter_destroy_fn>(NQ_SYM_ADAPTER_DESTROY);
             schema_ = fns_.describe();
@@ -90,6 +91,13 @@ public:
                                        Hex(schema_->abi_hash) + ", host is " + Hex(NQ_ADAPTER_ABI_HASH));
             }
             if (!schema_->name) throw PluginLoadError("adapter schema has no name: " + path);
+            if (schema_->feed == NQ_FEED_MBO) {
+                fns_.next = Resolve<nq_adapter_next_fn>(NQ_SYM_ADAPTER_NEXT);
+            } else if (schema_->feed == NQ_FEED_OHLCV) {
+                fns_.next_ohlcv = Resolve<nq_adapter_next_ohlcv_fn>(NQ_SYM_ADAPTER_NEXT_OHLCV);
+            } else {
+                throw PluginLoadError("adapter schema has an unknown feed: " + path);
+            }
         } catch (...) {
             ::dlclose(handle_);
             handle_ = nullptr;

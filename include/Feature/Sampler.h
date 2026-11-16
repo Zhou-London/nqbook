@@ -68,8 +68,8 @@ public:
     }
 
     template <typename Reader>
-    void OnEvent(std::int64_t ts, std::uint8_t action, Reader&& read) {
-        Visit([&](auto& t) { t.OnEvent(ts, action, Emitter(read)); });
+    void OnEvent(std::int64_t ts, bool is_trade, Reader&& read) {
+        Visit([&](auto& t) { t.OnEvent(ts, is_trade, Emitter(read)); });
     }
 
     template <typename Reader>
@@ -82,7 +82,8 @@ public:
         Visit([&](auto& t) { t.Close(Emitter(read)); });
     }
 
-    void ResetBaseline() noexcept;
+    void CarryDelta(std::span<const double> values) noexcept;
+    void ResetBaseline(std::span<const double> values) noexcept;
 
 private:
     template <typename Fn>
@@ -102,7 +103,8 @@ private:
     AnyTrigger trigger_;
     std::vector<SamplerColumn> columns_;
     RowBuffer rows_;
-    std::vector<double> last_;
+    std::vector<double> baseline_;
+    std::vector<double> carry_;
     std::vector<double> row_;
     RowSink* sink_;
     std::uint32_t sampler_index_;

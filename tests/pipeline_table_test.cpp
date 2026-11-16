@@ -28,7 +28,7 @@ static int TestMarket() {
     catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
     catalog.AddSampler(nq::SamplerSpec::Trades("t", 1).Columns({"test.trades"}));
 
-    nq::PipelineTable table(catalog, &Resolve, 16, 4);
+    nq::PipelineTable<nq_mbo> table(catalog, &Resolve, {.expected_orders = 16}, 4);
     CHECK(table.InstrumentCount() == 0 && table.Entries().size() == 4 && table.Find(9) == nullptr);
 
     table.Apply(Add(Sec(0.1), 1, 1, NQ_BID, P(100.50), Q(7)));
@@ -87,7 +87,7 @@ static int TestIdleBars() {
     catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
     catalog.AddSampler(nq::SamplerSpec::Time("1s_fill", kSec).FillGaps());
 
-    nq::PipelineTable table(catalog, &Resolve, 16, 4);
+    nq::PipelineTable<nq_mbo> table(catalog, &Resolve, {.expected_orders = 16}, 4);
     table.Apply(Add(Sec(0.5), 2, 1, NQ_BID, P(50.00), Q(1)));
     table.Apply(Add(Sec(0.6), 1, 1, NQ_BID, P(100.00), Q(1)));
     table.Apply(Add(Sec(1.5), 1, 2, NQ_BID, P(100.00), Q(1)));
@@ -110,14 +110,14 @@ static int TestQueueDrain() {
     nq::FeatureCatalog catalog;
     catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "test");
     catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
-    nq::PipelineTable table(catalog, &Resolve, 16, 4);
+    nq::PipelineTable<nq_mbo> table(catalog, &Resolve, {.expected_orders = 16}, 4);
 
-    nq::Orderbook::Queue q(64);
+    nlib::single_queue<nq_mbo> q(64);
     CHECK(q.try_push(Add(Sec(0.1), 1, 1, NQ_BID, P(10), Q(1))));
     CHECK(q.try_push(Add(Sec(0.2), 1, 2, NQ_ASK, P(11), Q(1))));
     CHECK(q.try_push(Trade(Sec(1.1), 1, 2, NQ_ASK, P(11), Q(1))));
     CHECK(table.Consume(q) == 3 && q.empty());
-    const nq::Pipeline& pipe = *table.Find(1);
+    const nq::Pipeline<nq_mbo>& pipe = *table.Find(1);
     const nq::RowBuffer& bars = pipe.Engine().GetSampler(0).Rows();
     CHECK(bars.RowCount() == 1 && RowIs(bars, 0, Sec(1.0), 1.0, 10.5, 0, 0, 0));
     CHECK(pipe.Book().BestAsk() == nullptr);
@@ -134,11 +134,11 @@ static int TestSession() {
     nq::host::AdapterPlugin adapter(NQ_SYNTHETIC_ADAPTER_PATH);
     nq::ParamsBuilder pb;
     pb.Set("count", "1000").Set("instruments", "3");
-    nq::Session session(catalog, adapter, *pb.Build(), nullptr, 8);
+    nq::Session<nq_mbo> session(catalog, adapter, *pb.Build(), nullptr, 8);
     std::atomic<bool> stop{false};
     const nq::RunResult r = session.Run(stop);
     CHECK(!r.interrupted && r.adapter_status == 0 && r.consumed == 1000);
-    const nq::PipelineTable& m = session.Pipelines();
+    const nq::PipelineTable<nq_mbo>& m = session.Pipelines();
     CHECK(m.InstrumentCount() == 3 && m.Stats().events == 1000 && m.Stats().instrument_unknown == 0);
     CHECK(m.Find(1)->Engine().GetInstrument().symbol == "SYN1" && m.Find(3)->Engine().GetInstrument().symbol == "SYN3");
     CHECK(m.Find(1)->Book().OrderCount() == 334 && m.Find(2)->Book().OrderCount() == 333);
@@ -148,7 +148,7 @@ static int TestSession() {
 
     nq::ParamsBuilder endless;
     endless.Set("count", "1").Set("endless", "true");
-    nq::Session forever(catalog, adapter, *endless.Build(), nullptr, 8);
+    nq::Session<nq_mbo> forever(catalog, adapter, *endless.Build(), nullptr, 8);
     std::atomic<bool> stop2{false};
     std::thread stopper([&] {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));

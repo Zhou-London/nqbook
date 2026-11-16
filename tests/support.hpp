@@ -14,6 +14,7 @@
 namespace nqtest {
 
 inline constexpr std::int64_t kSec = 1'000'000'000;
+inline constexpr std::int64_t kMin = 60 * kSec;
 
 inline std::int64_t Sec(double t) { return static_cast<std::int64_t>(std::llround(t * static_cast<double>(kSec))); }
 inline std::int64_t P(double x) { return static_cast<std::int64_t>(std::llround(x * static_cast<double>(NQ_PRICE_SCALE))); }
@@ -45,6 +46,11 @@ inline nq_mbo Trade(std::int64_t ts, std::uint32_t instrument, std::uint64_t mak
 
 inline nq_mbo Clear(std::int64_t ts, std::uint32_t instrument) {
     return Mbo(NQ_CLEAR, ts, instrument, 0, NQ_BID, 0, 0);
+}
+
+inline nq_ohlcv Ohlcv(std::int64_t ts, std::uint32_t instrument, double open, double high, double low, double close,
+                      double volume) {
+    return nq_ohlcv{ts, P(open), P(high), P(low), P(close), volume, instrument};
 }
 
 inline bool RowIs(const nq::RowBuffer& rows, std::size_t i, std::int64_t ts, double spread, double mid, double buy,

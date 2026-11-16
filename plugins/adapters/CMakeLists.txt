@@ -1,1 +1,2 @@
 nq_add_plugin(synthetic synthetic/synthetic_adapter.cpp)
+nq_add_plugin(synthetic_ohlcv synthetic_ohlcv/synthetic_ohlcv_adapter.cpp)

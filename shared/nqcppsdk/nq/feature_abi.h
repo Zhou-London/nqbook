@@ -59,12 +59,14 @@ typedef struct nq_schema {
     uint8_t requirement;
     uint32_t ncol;
     const nq_column* cols;
+    uint8_t feed;
 } nq_schema;
 
 typedef const nq_schema* (*nq_describe_fn)(void);
 typedef void* (*nq_init_fn)(const nq_params* params);
 typedef void (*nq_destroy_fn)(void* state);
 typedef void (*nq_on_event_fn)(void* state, const nq_event* event, const nq_book_view* book);
+typedef void (*nq_on_ohlcv_fn)(void* state, const nq_ohlcv* ohlcv);
 typedef void (*nq_read_fn)(void* state, const nq_book_view* book, double* out);
 typedef void (*nq_on_control_fn)(void* state, const nq_control* control);
 
@@ -72,6 +74,7 @@ typedef void (*nq_on_control_fn)(void* state, const nq_control* control);
 #define NQ_SYM_INIT "nq_init"
 #define NQ_SYM_DESTROY "nq_destroy"
 #define NQ_SYM_ON_EVENT "nq_on_event"
+#define NQ_SYM_ON_OHLCV "nq_on_ohlcv"
 #define NQ_SYM_READ "nq_read"
 #define NQ_SYM_ON_CONTROL "nq_on_control"
 

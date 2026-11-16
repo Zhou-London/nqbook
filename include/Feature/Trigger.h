@@ -3,9 +3,7 @@
 #include <cstdint>
 #include <variant>
 
-#include <nq/abi.h>
-
-#include <Clock/TimerQueue.h>
+#include <Clock/TimerWheel.h>
 
 namespace nq {
 
@@ -14,7 +12,7 @@ public:
     BarTrigger(std::int64_t interval, bool fill_gaps) noexcept : interval_(interval), fill_gaps_(fill_gaps) {}
 
     template <typename Emit>
-    void OnEvent(std::int64_t, std::uint8_t, Emit&&) noexcept {
+    void OnEvent(std::int64_t, bool, Emit&&) noexcept {
         dirty_ = true;
     }
 
@@ -43,7 +41,7 @@ public:
     }
 
     std::int64_t Due() const noexcept {
-        return started_ && (dirty_ || fill_gaps_) ? next_ : TimerQueue::kNever;
+        return started_ && (dirty_ || fill_gaps_) ? next_ : TimerWheel::kNever;
     }
 
 private:
@@ -67,9 +65,9 @@ public:
     CountTrigger(std::int64_t every, bool trades_only) noexcept : every_(every), trades_only_(trades_only) {}
 
     template <typename Emit>
-    void OnEvent(std::int64_t ts, std::uint8_t action, Emit&& emit) {
+    void OnEvent(std::int64_t ts, bool is_trade, Emit&& emit) {
         last_ts_ = ts;
-        if (trades_only_ && action != NQ_TRADE) return;
+        if (trades_only_ && !is_trade) return;
         if (++count_ < every_) return;
         count_ = 0;
         emit(ts);
@@ -85,7 +83,7 @@ public:
         emit(last_ts_);
     }
 
-    std::int64_t Due() const noexcept { return TimerQueue::kNever; }
+    std::int64_t Due() const noexcept { return TimerWheel::kNever; }
 
 private:
     std::int64_t every_;

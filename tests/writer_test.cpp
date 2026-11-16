@@ -153,7 +153,7 @@ static int TestWriterEngineLastRow(const nq::FeatureCatalog& catalog, const fs::
 }
 
 int main() {
-    const fs::path tmp = fs::temp_directory_path() / "nqbook_writer_test";
+    const fs::path tmp = fs::temp_directory_path() / "nqhpc_writer_test";
     fs::remove_all(tmp);
     fs::create_directories(tmp);
 

@@ -12,17 +12,16 @@
 #include <nq/feature_host.hpp>
 #include <nq/instrument.hpp>
 
-#include <Feature/OrderbookView.h>
 #include <Feature/FeatureCatalog.h>
 #include <Feature/Sampler.h>
-#include <Orderbook.h>
 #include <Writer/RowSink.h>
 
 namespace nq {
 
 class FeatureEngine {
 public:
-    FeatureEngine(const Orderbook& book, const FeatureCatalog& catalog, Instrument spec, RowSink* sink = nullptr);
+    FeatureEngine(const FeatureCatalog& catalog, Instrument spec, RowSink* sink = nullptr,
+                  const nq_book_view* book = nullptr);
 
     FeatureEngine(const FeatureEngine&) = delete;
     FeatureEngine& operator=(const FeatureEngine&) = delete;
@@ -30,11 +29,11 @@ public:
     void Advance(std::int64_t ts);
     std::int64_t Due() const noexcept;
     void OnEvent(const nq_mbo& m, nlib::qty_t filled);
+    void OnOhlcv(const nq_ohlcv& ohlcv);
     void Close();
 
     std::span<const double> ReadAll();
 
-    const Orderbook& Book() const noexcept { return view_.Book(); }
     const nq::Instrument& GetInstrument() const noexcept { return spec_; }
     const FeatureCatalog& Catalog() const noexcept { return *catalog_; }
     const std::vector<ColumnInfo>& Columns() const noexcept { return catalog_->Columns(); }
@@ -44,7 +43,10 @@ public:
     Sampler* FindSampler(std::string_view name) noexcept;
 
 private:
-    OrderbookView view_;
+    void ResetPlugins(std::int64_t ts);
+    void NotifySamplers(std::int64_t ts, bool is_trade);
+
+    const nq_book_view* book_;
     const FeatureCatalog* catalog_;
     Instrument spec_;
     std::vector<host::PluginInstance> instances_;

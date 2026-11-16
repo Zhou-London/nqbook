@@ -23,7 +23,8 @@ Sampler::Sampler(SamplerSpec spec, std::vector<std::string> names, std::vector<S
       trigger_(MakeTrigger(spec_)),
       columns_(std::move(columns)),
       rows_(std::move(names)),
-      last_(columns_.size(), 0.0),
+      baseline_(columns_.size(), 0.0),
+      carry_(columns_.size(), 0.0),
       row_(columns_.size(), 0.0),
       sink_(sink),
       sampler_index_(sampler_index),
@@ -33,8 +34,9 @@ void Sampler::Emit(std::int64_t ts, std::span<const double> values) {
     for (std::size_t i = 0; i < columns_.size(); ++i) {
         const double v = values[columns_[i].index];
         if (columns_[i].kind == NQ_COLUMN_CUMULATIVE) {
-            row_[i] = v - last_[i];
-            last_[i] = v;
+            row_[i] = v - baseline_[i] + carry_[i];
+            baseline_[i] = v;
+            carry_[i] = 0.0;
         } else {
             row_[i] = v;
         }
@@ -43,8 +45,16 @@ void Sampler::Emit(std::int64_t ts, std::span<const double> values) {
     else rows_.Push(ts, row_);
 }
 
-void Sampler::ResetBaseline() noexcept {
-    for (double& v : last_) v = 0.0;
+void Sampler::CarryDelta(std::span<const double> values) noexcept {
+    for (std::size_t i = 0; i < columns_.size(); ++i) {
+        if (columns_[i].kind == NQ_COLUMN_CUMULATIVE) carry_[i] += values[columns_[i].index] - baseline_[i];
+    }
+}
+
+void Sampler::ResetBaseline(std::span<const double> values) noexcept {
+    for (std::size_t i = 0; i < columns_.size(); ++i) {
+        if (columns_[i].kind == NQ_COLUMN_CUMULATIVE) baseline_[i] = values[columns_[i].index];
+    }
 }
 
 }  // namespace nq

@@ -1,1 +1,2 @@
 nq_add_plugin(example_features example/example_features.cpp)
+nq_add_plugin(example_ohlcv_features example_ohlcv/example_ohlcv_features.cpp)

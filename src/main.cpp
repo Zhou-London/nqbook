@@ -31,10 +31,12 @@ enum ExitCode : int {
     kParamsInvalid = 6,
     kAdapterFailed = 7,
     kOutputFailed = 8,
+    kFeedMismatch = 9,
     kInterrupted = 130,
 };
 
 int ExitCodeFor(const std::exception& e, int fallback) {
+    if (dynamic_cast<const nq::FeedMismatchError*>(&e)) return kFeedMismatch;
     if (dynamic_cast<const nq::host::AbiMismatchError*>(&e)) return kAbiMismatch;
     if (dynamic_cast<const nq::host::PluginInitError*>(&e)) return kPluginInit;
     if (dynamic_cast<const nq::host::PluginLoadError*>(&e)) return kPluginLoad;
@@ -47,7 +49,7 @@ int Attempt(int fallback, std::invocable auto&& step) {
         step();
         return kOk;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "nqbook: %s\n", e.what());
+        std::fprintf(stderr, "nqhpc: %s\n", e.what());
         return ExitCodeFor(e, fallback);
     }
 }
@@ -75,14 +77,14 @@ struct OutputOptions {
 void AddPluginOptions(CLI::App* cmd, PluginOptions& opt) {
     cmd->add_option("--plugin", opt.plugins, "Plugin .so to load, in order; repeatable")->check(CLI::ExistingFile);
     cmd->add_option("--plugin-dir", opt.plugin_dir, "Directory whose *.so are loaded in filename order")->check(CLI::ExistingDirectory);
-    cmd->add_option("--sampler", opt.samplers, "NAME=TRIGGER:EVERY, e.g. 1s=time:1s, fast=events:100, t=trades:1; repeatable");
+    cmd->add_option("--sampler", opt.samplers, "NAME=TRIGGER:EVERY, e.g. 1s=time:1s, fast=events:100, t=trades:1 (trades needs an MBO feed); repeatable");
     cmd->add_flag("--fill-gaps", opt.fill_gaps, "Time samplers emit a row for every empty bar");
 }
 
 void AddAdapterOptions(CLI::App* cmd, AdapterOptions& opt) {
-    cmd->add_option("--adapter", opt.adapter, "Adapter .so that produces the mbo stream")->required()->check(CLI::ExistingFile);
+    cmd->add_option("--adapter", opt.adapter, "Adapter .so that produces the MBO or OHLCV feed")->required()->check(CLI::ExistingFile);
     cmd->add_option("--adapter-param", opt.params, "KEY=VALUE for the adapter, after its .params file; repeatable");
-    cmd->add_option("--queue-capacity", opt.queue_capacity, "Adapter-to-book queue capacity, rounded up to a power of two")->check(CLI::PositiveNumber);
+    cmd->add_option("--queue-capacity", opt.queue_capacity, "Adapter-to-pipeline queue capacity, rounded up to a power of two")->check(CLI::PositiveNumber);
 }
 
 void AddOutputOptions(CLI::App* cmd, OutputOptions& opt) {
@@ -142,10 +144,46 @@ int Check(const PluginOptions& popt, const std::string& format) {
     nq::FeatureCatalog catalog;
     if (int rc = LoadCatalog(popt, catalog)) return rc;
 
-    if (int rc = Attempt(kPluginInit, [&] { nq::Pipeline probe(catalog, nq::Instrument{0, "probe", 1, 1}, 16); })) return rc;
+    if (int rc = Attempt(kPluginInit, [&] { nq::FeatureEngine probe(catalog, nq::Instrument{0, "probe", 1, 1}); })) return rc;
 
     if (format == "json") nq::PrintCatalogJson(stdout, catalog);
     else nq::PrintCatalogText(stdout, catalog);
+    return kOk;
+}
+
+template <class Record>
+int RunSession(const nq::FeatureCatalog& catalog, const nq::host::AdapterPlugin& adapter, const nq_params& params,
+               std::unique_ptr<nq::ParquetWriter> writer, std::size_t queue_capacity, const std::string& csv_dir) {
+    const bool parquet = writer != nullptr;
+
+    std::optional<nq::Session<Record>> session;
+    nq::RunResult result;
+    if (int rc = Attempt(kAdapterFailed, [&] {
+            session.emplace(catalog, adapter, params, std::move(writer), queue_capacity);
+            result = session->Run(g_stop);
+        })) return rc;
+    nq::PrintFeedReport(stderr, session->Pipelines(), result);
+
+    if (parquet) {
+        if (!result.writer_error.empty()) {
+            std::fprintf(stderr, "nqhpc: %s\n", result.writer_error.c_str());
+            return kOutputFailed;
+        }
+        for (const auto& p : session->Writer()->Writer().Files()) std::fprintf(stderr, "wrote %s\n", p.string().c_str());
+    }
+    if (!csv_dir.empty()) {
+        if (int rc = Attempt(kOutputFailed, [&] {
+                for (const auto& p : nq::WriteSamplerCsv(session->Pipelines(), csv_dir)) {
+                    std::fprintf(stderr, "wrote %s\n", p.string().c_str());
+                }
+            })) return rc;
+    }
+
+    if (result.interrupted) return kInterrupted;
+    if (result.adapter_status != 0) {
+        std::fprintf(stderr, "nqhpc: adapter ended with status %d\n", result.adapter_status);
+        return kAdapterFailed;
+    }
     return kOk;
 }
 
@@ -158,6 +196,12 @@ int Run(const PluginOptions& popt, const AdapterOptions& aopt, const OutputOptio
     nq::ParamsBuilder pb;
     if (int rc = ParseAdapterParams(aopt, pb)) return rc;
 
+    std::optional<nq::host::AdapterPlugin> adapter;
+    if (int rc = Attempt(kPluginLoad, [&] { adapter.emplace(aopt.adapter); })) return rc;
+
+    const nq::Feed feed = static_cast<nq::Feed>(adapter->Schema().feed);
+    if (int rc = Attempt(kFeedMismatch, [&] { catalog.RequireFeed(feed); })) return rc;
+
     const bool parquet = !feed_only && !oopt.dir.empty() && oopt.format == "parquet";
     const bool csv = !feed_only && !oopt.dir.empty() && oopt.format == "csv";
     std::unique_ptr<nq::ParquetWriter> writer;
@@ -166,42 +210,15 @@ int Run(const PluginOptions& popt, const AdapterOptions& aopt, const OutputOptio
                 writer = std::make_unique<nq::ParquetWriter>(catalog, oopt.dir, nq::ParquetOptions{oopt.row_group_rows});
             })) return rc;
     }
+    const std::string csv_dir = csv ? oopt.dir : "";
 
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
 
-    std::optional<nq::host::AdapterPlugin> adapter;
-    if (int rc = Attempt(kPluginLoad, [&] { adapter.emplace(aopt.adapter); })) return rc;
-
-    std::optional<nq::Session> session;
-    nq::RunResult result;
-    if (int rc = Attempt(kAdapterFailed, [&] {
-            session.emplace(catalog, *adapter, *pb.Build(), std::move(writer), aopt.queue_capacity);
-            result = session->Run(g_stop);
-        })) return rc;
-    nq::PrintFeedReport(stderr, session->Pipelines(), result);
-
-    if (parquet) {
-        if (!result.writer_error.empty()) {
-            std::fprintf(stderr, "nqbook: %s\n", result.writer_error.c_str());
-            return kOutputFailed;
-        }
-        for (const auto& p : session->Writer()->Writer().Files()) std::fprintf(stderr, "wrote %s\n", p.string().c_str());
+    if (feed == nq::Feed::OHLCV) {
+        return RunSession<nq_ohlcv>(catalog, *adapter, *pb.Build(), std::move(writer), aopt.queue_capacity, csv_dir);
     }
-    if (csv) {
-        if (int rc = Attempt(kOutputFailed, [&] {
-                for (const auto& p : nq::WriteSamplerCsv(session->Pipelines(), oopt.dir)) {
-                    std::fprintf(stderr, "wrote %s\n", p.string().c_str());
-                }
-            })) return rc;
-    }
-
-    if (result.interrupted) return kInterrupted;
-    if (result.adapter_status != 0) {
-        std::fprintf(stderr, "nqbook: adapter ended with status %d\n", result.adapter_status);
-        return kAdapterFailed;
-    }
-    return kOk;
+    return RunSession<nq_mbo>(catalog, *adapter, *pb.Build(), std::move(writer), aopt.queue_capacity, csv_dir);
 }
 
 int PrintHelp(CLI::App& app, const std::string& topic) {
@@ -213,7 +230,7 @@ int PrintHelp(CLI::App& app, const std::string& topic) {
         std::printf("%s", app.get_subcommand(topic)->help(app.get_name()).c_str());
         return kOk;
     } catch (const CLI::OptionNotFound&) {
-        std::fprintf(stderr, "nqbook: unknown subcommand '%s'\n", topic.c_str());
+        std::fprintf(stderr, "nqhpc: unknown subcommand '%s'\n", topic.c_str());
         return static_cast<int>(CLI::ExitCodes::OptionNotFound);
     }
 }
@@ -221,7 +238,7 @@ int PrintHelp(CLI::App& app, const std::string& topic) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    CLI::App app{"nqbook: MBO order book with a plugin feature engine"};
+    CLI::App app{"nqhpc: plugin feature engine over an MBO or OHLCV feed"};
     app.require_subcommand(1);
 
     PluginOptions check_plugins;
@@ -233,17 +250,17 @@ int main(int argc, char** argv) {
     PluginOptions run_plugins;
     AdapterOptions run_adapter;
     OutputOptions run_output;
-    CLI::App* run = app.add_subcommand("run", "Consume an adapter's mbo stream through the book and plugins");
+    CLI::App* run = app.add_subcommand("run", "Consume an adapter's feed through the plugins and write the sampled rows");
     AddAdapterOptions(run, run_adapter);
     AddPluginOptions(run, run_plugins);
     AddOutputOptions(run, run_output);
 
     AdapterOptions feed_adapter;
-    CLI::App* feed = app.add_subcommand("check-feed", "Consume an adapter's mbo stream through bare books and report feed quality");
+    CLI::App* feed = app.add_subcommand("check-feed", "Consume an adapter's feed without plugins and report feed quality");
     AddAdapterOptions(feed, feed_adapter);
 
     std::string help_topic;
-    CLI::App* help = app.add_subcommand("help", "Print help for nqbook or for a subcommand");
+    CLI::App* help = app.add_subcommand("help", "Print help for nqhpc or for a subcommand");
     help->add_option("subcommand", help_topic, "Subcommand to describe");
 
     CLI11_PARSE(app, argc, argv);

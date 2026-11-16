@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <thread>
 
+#include <nlib/single_queue.h>
+
 #include "support.hpp"
 
 using nq::Orderbook;
@@ -71,7 +73,7 @@ int main() {
     for (std::uint64_t i = 2; i <= 1000; i += 2) ob.Apply(Cancel(2, 0, i));
     CHECK(ob.OrderCount() == 0 && ob.AskLevelCount() == 0);
 
-    Orderbook::Queue q(16);
+    nlib::single_queue<nq_mbo> q(16);
     Orderbook ob2;
     std::thread producer([&] {
         for (std::uint64_t i = 1; i <= 10000; ++i)

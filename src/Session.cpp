@@ -13,24 +13,27 @@ std::optional<WriterEngine> MakeWriter(std::unique_ptr<ParquetWriter> writer, st
 
 }  // namespace
 
-Session::Session(const FeatureCatalog& catalog, const host::AdapterPlugin& adapter, const nq_params& adapter_params,
-                 std::unique_ptr<ParquetWriter> writer, std::size_t queue_capacity, std::size_t expected_orders)
+template <class Record>
+Session<Record>::Session(const FeatureCatalog& catalog, const host::AdapterPlugin& adapter,
+                         const nq_params& adapter_params, std::unique_ptr<ParquetWriter> writer,
+                         std::size_t queue_capacity, PipelineOptions<Record> options)
     : adapter_(adapter.Create(adapter_params), queue_capacity),
       writer_(MakeWriter(std::move(writer), queue_capacity)),
       table_(
           catalog, 
           [this](std::uint32_t id) { return adapter_.FindInstrument(id); },
-          expected_orders,
+          options,
           defaults::kInstrumentSlots, 
           writer_ ? &*writer_ : nullptr) {}
 
-RunResult Session::Run(const std::atomic<bool>& stop, std::size_t batch) {
+template <class Record>
+RunResult Session<Record>::Run(const std::atomic<bool>& stop, std::size_t batch) {
     RunResult result;
     
     if (writer_) writer_->Start();
     adapter_.Start();
     
-    Orderbook::Queue& q = adapter_.Queue();
+    nlib::single_queue<Record>& q = adapter_.Queue();
     for (;;) {
         const std::size_t n = table_.Consume(q, batch);
         result.consumed += n;
@@ -65,5 +68,8 @@ RunResult Session::Run(const std::atomic<bool>& stop, std::size_t batch) {
     }
     return result;
 }
+
+template class Session<nq_mbo>;
+template class Session<nq_ohlcv>;
 
 }  // namespace nq

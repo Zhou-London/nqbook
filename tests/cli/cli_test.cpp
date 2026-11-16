@@ -30,7 +30,7 @@ static Result Run(const std::string& args, const fs::path& tmp, const fs::path& 
     const fs::path out = tmp / "stdout.txt";
     const fs::path err = tmp / "stderr.txt";
     const std::string cd = cwd.empty() ? "" : "cd " + Quote(cwd) + " && ";
-    const std::string cmd = cd + Quote(NQBOOK_PATH) + " " + args + " >" + Quote(out) + " 2>" + Quote(err);
+    const std::string cmd = cd + Quote(NQHPC_PATH) + " " + args + " >" + Quote(out) + " 2>" + Quote(err);
     const int status = std::system(cmd.c_str());
     auto slurp = [](const fs::path& p) {
         std::ifstream in(p);
@@ -54,6 +54,12 @@ static int TestParsing() {
     CHECK(nq::ParseDuration("250ms") == 250'000'000);
     CHECK(nq::ParseDuration("5m") == 300'000'000'000);
     CHECK(nq::ParseDuration("7ns") == 7);
+    CHECK(nq::ParseDuration("2562047h") == 2562047 * 3'600'000'000'000);
+    for (const char* too_large : {"2562048h", "9223372036854775808ns", "99999999999999999999s"}) {
+        bool threw = false;
+        try { nq::ParseDuration(too_large); } catch (const std::invalid_argument&) { threw = true; }
+        CHECK(threw);
+    }
     for (const char* bad : {"1", "s", "0s", "1x", "", "-1s"}) {
         bool threw = false;
         try { nq::ParseDuration(bad); } catch (const std::invalid_argument&) { threw = true; }
@@ -233,14 +239,65 @@ static int TestRunCli(const fs::path& tmp) {
     return 0;
 }
 
+static int TestOhlcvCli(const fs::path& tmp) {
+    const std::string adapter = "--adapter " + Quote(NQ_SYNTHETIC_OHLCV_ADAPTER_PATH) + " --adapter-param count=10 --adapter-param instruments=2";
+    const std::string plugin = " --plugin " + Quote(NQ_EXAMPLE_OHLCV_FEATURES_PATH);
+    const std::string samplers = " --sampler each=events:1 --sampler 1m=time:1m";
+    const std::string mbo_adapter = "--adapter " + Quote(NQ_SYNTHETIC_ADAPTER_PATH) + " --adapter-param count=10";
+    const std::string mbo_plugin = " --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH);
+
+    const fs::path pq = tmp / "ohlcv_pq";
+    Result r = Run("run " + adapter + plugin + samplers + " --out-dir " + Quote(pq), tmp);
+    CHECK(r.code == 0);
+    CHECK(Has(r.err, "feed  events=10 instruments=2 ts_regressions=0 instrument_unknown=0"));
+    CHECK(Has(r.err, "1      SYN1") && Has(r.err, "2      SYN2") && !Has(r.err, "book  ") && !Has(r.err, "orders="));
+    CHECK(ParquetRows(pq / "each.parquet") == 10 && ParquetRows(pq / "1m.parquet") == 10);
+    CHECK(ParquetRows(pq / "instruments.parquet") == 2);
+
+    const fs::path csv = tmp / "ohlcv_csv";
+    r = Run("run " + adapter + plugin + samplers + " --out-format csv --out-dir " + Quote(csv), tmp);
+    CHECK(r.code == 0);
+    {
+        std::ifstream in(csv / "each.csv");
+        std::string header, line;
+        std::getline(in, header);
+        CHECK(header == "instrument,symbol,ts,example_ohlcv_features.close,example_ohlcv_features.range,example_ohlcv_features.volume,example_ohlcv_features.count");
+        std::getline(in, line);
+        CHECK(line == "1,SYN1,0,101,3,1,1");
+    }
+
+    r = Run("check" + plugin + samplers, tmp);
+    CHECK(r.code == 0 && Has(r.out, "feed=OHLCV") && Has(r.out, "requires=none") && Has(r.out, "columns (4)"));
+    r = Run("check" + mbo_plugin, tmp);
+    CHECK(r.code == 0 && Has(r.out, "feed=MBO"));
+    r = Run("check" + plugin + " --format json", tmp);
+    CHECK(r.code == 0 && Has(r.out, "\"feed\": \"OHLCV\""));
+
+    r = Run("check-feed " + adapter, tmp);
+    CHECK(r.code == 0 && Has(r.err, "feed  events=10 instruments=2") && !Has(r.err, "adds="));
+
+    r = Run("run " + adapter + mbo_plugin, tmp);
+    CHECK(r.code == 9 && Has(r.err, "plugins read MBO, the adapter sends OHLCV"));
+    r = Run("run " + mbo_adapter + plugin, tmp);
+    CHECK(r.code == 9 && Has(r.err, "plugins read OHLCV, the adapter sends MBO"));
+    r = Run("check" + mbo_plugin + plugin, tmp);
+    CHECK(r.code == 9 && Has(r.err, "reads OHLCV, earlier plugins read MBO"));
+    r = Run("run " + adapter + plugin + " --sampler t=trades:1", tmp);
+    CHECK(r.code == 9 && Has(r.err, "trades sampler needs an MBO feed: t"));
+    r = Run("run " + adapter + " --sampler t=trades:1", tmp);
+    CHECK(r.code == 9 && Has(r.err, "trades sampler needs an MBO feed: t"));
+    return 0;
+}
+
 int main() {
-    const fs::path tmp = fs::temp_directory_path() / "nqbook_cli_test";
+    const fs::path tmp = fs::temp_directory_path() / "nqhpc_cli_test";
     fs::remove_all(tmp);
     fs::create_directories(tmp);
     if (int rc = TestParsing()) return rc;
     if (int rc = TestFiles(tmp)) return rc;
     if (int rc = TestCli(tmp)) return rc;
     if (int rc = TestRunCli(tmp)) return rc;
+    if (int rc = TestOhlcvCli(tmp)) return rc;
     fs::remove_all(tmp);
     std::printf("ok\n");
     return 0;

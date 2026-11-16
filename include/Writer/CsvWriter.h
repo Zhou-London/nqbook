@@ -7,6 +7,8 @@
 
 namespace nq {
 
-std::vector<std::filesystem::path> WriteSamplerCsv(const PipelineTable& table, const std::filesystem::path& dir);
+template <class Record>
+std::vector<std::filesystem::path> WriteSamplerCsv(const PipelineTable<Record>& table,
+                                                   const std::filesystem::path& dir);
 
 }  // namespace nq

@@ -10,7 +10,7 @@
 
 using namespace nqtest;
 
-static void Step(nq::Pipeline& pipe, const nq_mbo& m) {
+static void Step(nq::Pipeline<nq_mbo>& pipe, const nq_mbo& m) {
     pipe.Engine().Advance(m.ts);
     pipe.Apply(m);
 }
@@ -63,7 +63,7 @@ static int TestPipeline() {
     try { catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "late"); } catch (const std::logic_error&) { threw = true; }
     CHECK(threw);
 
-    nq::Pipeline pipe(catalog, nq::Instrument{0, "TEST", 1, 1});
+    nq::Pipeline<nq_mbo> pipe(catalog, nq::Instrument{0, "TEST", 1, 1});
     nq::FeatureEngine& eng = pipe.Engine();
     CHECK(eng.SamplerCount() == 4 && eng.Columns().size() == 5);
     nq::Sampler& bars = eng.GetSampler(0);
@@ -123,9 +123,50 @@ static int TestPipeline() {
     return 0;
 }
 
+static int TestClearMidBar() {
+    nq::FeatureCatalog catalog;
+    catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "test");
+    catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec).Columns({"test.buy_vol", "test.trades"}));
+    nq::Pipeline<nq_mbo> pipe(catalog, nq::Instrument{0, "TEST", 1, 1});
+    const nq::RowBuffer& rows = pipe.Engine().GetSampler(0).Rows();
+
+    Step(pipe, Add(Sec(0.1), 0, 1, NQ_ASK, P(100.70), Q(5)));
+    Step(pipe, Trade(Sec(0.5), 0, 1, NQ_ASK, P(100.70), Q(2)));
+    Step(pipe, Clear(Sec(0.7), 0));
+    Step(pipe, Add(Sec(0.8), 0, 2, NQ_ASK, P(100.70), Q(5)));
+    Step(pipe, Trade(Sec(0.9), 0, 2, NQ_ASK, P(100.70), Q(1)));
+    Step(pipe, Add(Sec(1.2), 0, 3, NQ_ASK, P(100.80), Q(5)));
+    CHECK(rows.RowCount() == 1 && rows.Ts(0) == Sec(1.0));
+    CHECK(Near(rows.At(0, 0), 3) && Near(rows.At(0, 1), 2));
+
+    Step(pipe, Add(Sec(2.2), 0, 4, NQ_ASK, P(100.90), Q(5)));
+    CHECK(rows.RowCount() == 2 && Near(rows.At(1, 0), 0) && Near(rows.At(1, 1), 0));
+    return 0;
+}
+
+static int TestClearIgnoredByPlugin() {
+    nq::FeatureCatalog catalog;
+    catalog.LoadPlugin(NQ_IGNORE_RESET_FEATURES_PATH, "test");
+    catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
+    nq::Pipeline<nq_mbo> pipe(catalog, nq::Instrument{0, "TEST", 1, 1});
+    const nq::RowBuffer& rows = pipe.Engine().GetSampler(0).Rows();
+    const double lot = static_cast<double>(Q(1));
+
+    Step(pipe, Add(Sec(0.1), 0, 1, NQ_ASK, P(100.70), Q(50)));
+    Step(pipe, Trade(Sec(0.5), 0, 1, NQ_ASK, P(100.70), Q(10)));
+    Step(pipe, Trade(Sec(1.5), 0, 1, NQ_ASK, P(100.70), Q(4)));
+    Step(pipe, Clear(Sec(2.5), 0));
+    Step(pipe, Add(Sec(3.2), 0, 2, NQ_ASK, P(100.70), Q(5)));
+    CHECK(rows.RowCount() == 3);
+    CHECK(Near(rows.At(0, 0), 10 * lot) && Near(rows.At(1, 0), 4 * lot) && Near(rows.At(2, 0), 0));
+    return 0;
+}
+
 int main() {
     if (int r = TestAdapter()) return r;
     if (int r = TestPipeline()) return r;
+    if (int r = TestClearMidBar()) return r;
+    if (int r = TestClearIgnoredByPlugin()) return r;
     std::printf("ok\n");
     return 0;
 }

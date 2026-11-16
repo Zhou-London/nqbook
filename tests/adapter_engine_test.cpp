@@ -11,7 +11,7 @@ static int TestAdapterEngine() {
     nq::host::AdapterPlugin plugin(NQ_SYNTHETIC_ADAPTER_PATH);
     nq::ParamsBuilder pb;
     pb.Set("count", "100").Set("instruments", "3").Set("again_every", "7");
-    nq::AdapterEngine engine(plugin.Create(*pb.Build()), 4);
+    nq::AdapterEngine<nq_mbo> engine(plugin.Create(*pb.Build()), 4);
     CHECK(engine.Queue().capacity() == 4);
     CHECK(!engine.FindInstrument(1));
 
@@ -41,14 +41,14 @@ static int TestAdapterEngine() {
 
     nq::ParamsBuilder unknown;
     unknown.Set("count", "2").Set("instruments", "1");
-    nq::AdapterEngine lookup(plugin.Create(*unknown.Build()), 8);
+    nq::AdapterEngine<nq_mbo> lookup(plugin.Create(*unknown.Build()), 8);
     lookup.Start();
     while (!lookup.Ended()) std::this_thread::yield();
     CHECK(lookup.FindInstrument(1) && !lookup.FindInstrument(2));
 
     nq::ParamsBuilder endless;
     endless.Set("count", "1").Set("endless", "true");
-    nq::AdapterEngine blocked(plugin.Create(*endless.Build()), 1);
+    nq::AdapterEngine<nq_mbo> blocked(plugin.Create(*endless.Build()), 1);
     blocked.Start();
     while (blocked.Stalls() == 0) std::this_thread::yield();
     CHECK(blocked.Pushed() == 1 && !blocked.Ended());

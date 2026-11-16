@@ -22,6 +22,7 @@ struct PluginFns {
     nq_init_fn init = nullptr;
     nq_destroy_fn destroy = nullptr;
     nq_on_event_fn on_event = nullptr;
+    nq_on_ohlcv_fn on_ohlcv = nullptr;
     nq_read_fn read = nullptr;
     nq_on_control_fn on_control = nullptr;
 };
@@ -56,9 +57,11 @@ public:
         fns_.on_event(state_, &e, &book);
     }
 
-    void Read(std::span<double> out, const nq_book_view& book) {
+    void OnOhlcv(const nq_ohlcv& ohlcv) noexcept { fns_.on_ohlcv(state_, &ohlcv); }
+
+    void Read(std::span<double> out, const nq_book_view* book) {
         if (out.size() < schema_->ncol) throw std::length_error("nq::host::PluginInstance::Read: output too small");
-        fns_.read(state_, &book, out.data());
+        fns_.read(state_, book, out.data());
     }
 
     void OnControl(const nq_control& c) noexcept { fns_.on_control(state_, &c); }
@@ -87,10 +90,8 @@ public:
             fns_.describe = Resolve<nq_describe_fn>(NQ_SYM_DESCRIBE);
             fns_.init = Resolve<nq_init_fn>(NQ_SYM_INIT);
             fns_.destroy = Resolve<nq_destroy_fn>(NQ_SYM_DESTROY);
-            fns_.on_event = Resolve<nq_on_event_fn>(NQ_SYM_ON_EVENT);
             fns_.read = Resolve<nq_read_fn>(NQ_SYM_READ);
             fns_.on_control = Resolve<nq_on_control_fn>(NQ_SYM_ON_CONTROL);
-            
             schema_ = fns_.describe();
             if (!schema_) throw PluginLoadError("nq_describe returned null: " + path);
             if (schema_->abi_hash != NQ_ABI_HASH) {
@@ -98,6 +99,13 @@ public:
                                          Hex(schema_->abi_hash) + ", host is " + Hex(NQ_ABI_HASH));
             }
             if (schema_->ncol > 0 && !schema_->cols) throw PluginLoadError("schema has no columns: " + path);
+            if (schema_->feed == NQ_FEED_MBO) {
+                fns_.on_event = Resolve<nq_on_event_fn>(NQ_SYM_ON_EVENT);
+            } else if (schema_->feed == NQ_FEED_OHLCV) {
+                fns_.on_ohlcv = Resolve<nq_on_ohlcv_fn>(NQ_SYM_ON_OHLCV);
+            } else {
+                throw PluginLoadError("schema has an unknown feed: " + path);
+            }
         } catch (...) {
             ::dlclose(handle_);
             handle_ = nullptr;
