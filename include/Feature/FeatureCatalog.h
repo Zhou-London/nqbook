@@ -2,18 +2,27 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <nq/feature_host.hpp>
+#include <nq/types.hpp>
 
 #include <Feature/Sampler.h>
 
 namespace nq {
 
 using KeyValues = std::vector<std::pair<std::string, std::string>>;
+
+class FeedMismatchError : public std::invalid_argument {
+public:
+    using std::invalid_argument::invalid_argument;
+};
+
+constexpr const char* FeedName(Feed feed) noexcept { return feed == Feed::OHLCV ? "OHLCV" : "MBO"; }
 
 struct ColumnInfo {
     std::string name;
@@ -32,13 +41,18 @@ struct SamplerTemplate {
 
 class FeatureCatalog {
 public:
+    /* ---------- CTR/DTRs ---------- */
     FeatureCatalog() = default;
     FeatureCatalog(const FeatureCatalog&) = delete;
     FeatureCatalog& operator=(const FeatureCatalog&) = delete;
 
+    /* ---------- Member Functions ---------- */
     std::size_t LoadPlugin(const std::string& path, std::string name = "", KeyValues params = {});
     void AddSampler(SamplerSpec spec);
+    void RequireFeed(Feed adapter_feed) const;
 
+    /* ---------- Getters ---------- */
+    Feed GetFeed() const noexcept { return feed_; }
     std::size_t PluginCount() const noexcept { return plugins_.size(); }
     const host::Plugin& Plugin(std::size_t i) const noexcept { return plugins_[i]; }
     const std::string& PluginName(std::size_t i) const noexcept { return names_[i]; }
@@ -51,6 +65,8 @@ public:
 private:
     std::size_t FindColumn(std::string_view name) const;
 
+    /* ---------- Internal States ---------- */
+    Feed feed_ = Feed::MBO;
     std::vector<host::Plugin> plugins_;
     std::vector<std::string> names_;
     std::vector<KeyValues> params_;

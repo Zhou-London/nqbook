@@ -23,7 +23,9 @@ std::string CsvString(std::string_view s) {
 
 }  // namespace
 
-std::vector<std::filesystem::path> WriteSamplerCsv(const PipelineTable& table, const std::filesystem::path& dir) {
+template <class Record>
+std::vector<std::filesystem::path> WriteSamplerCsv(const PipelineTable<Record>& table,
+                                                   const std::filesystem::path& dir) {
     std::filesystem::create_directories(dir);
     std::vector<std::filesystem::path> written;
     const auto& templates = table.Catalog().Samplers();
@@ -51,5 +53,9 @@ std::vector<std::filesystem::path> WriteSamplerCsv(const PipelineTable& table, c
     }
     return written;
 }
+
+template std::vector<std::filesystem::path> WriteSamplerCsv(const PipelineTable<nq_mbo>&, const std::filesystem::path&);
+template std::vector<std::filesystem::path> WriteSamplerCsv(const PipelineTable<nq_ohlcv>&,
+                                                            const std::filesystem::path&);
 
 }  // namespace nq

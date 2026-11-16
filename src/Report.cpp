@@ -8,6 +8,7 @@ namespace {
 
 const char* RequiresName(std::uint8_t r) {
     switch (r) {
+        case NQ_REQUIRES_NONE: return "none";
         case NQ_REQUIRES_L1: return "L1";
         case NQ_REQUIRES_MBP: return "MBP";
         case NQ_REQUIRES_MBO: return "MBO";
@@ -41,14 +42,42 @@ std::string JsonString(std::string_view s) {
     return out;
 }
 
+const char* FeedNameOf(const host::Plugin& plugin) { return FeedName(static_cast<Feed>(plugin.Schema().feed)); }
+
+template <class Record>
+void PrintFeedSummary(std::FILE* out, const PipelineTable<Record>& table, const RunResult& result) {
+    const FeedStats& f = table.Stats();
+    std::fprintf(out, "feed  events=%llu instruments=%zu ts_regressions=%llu instrument_unknown=%llu stalls=%llu first_ts=%lld last_ts=%lld adapter_status=%d%s\n",
+                 static_cast<unsigned long long>(f.events), table.InstrumentCount(),
+                 static_cast<unsigned long long>(f.ts_regressions),
+                 static_cast<unsigned long long>(f.instrument_unknown),
+                 static_cast<unsigned long long>(result.stalls), static_cast<long long>(f.first_ts),
+                 static_cast<long long>(f.last_ts), result.adapter_status, result.interrupted ? " interrupted" : "");
+
+    if (result.has_writer) {
+        std::fprintf(out, "writer  rows=%llu stalls=%llu%s%s\n", static_cast<unsigned long long>(result.rows_written),
+                     static_cast<unsigned long long>(result.writer_stalls),
+                     result.writer_error.empty() ? "" : " error=", result.writer_error.c_str());
+    }
+}
+
+template <class Entry>
+void PrintInstrumentSummary(std::FILE* out, const Entry& e) {
+    std::fprintf(out, "  %-6u %-16s %s events=%llu ts_regressions=%llu", e.id,
+                 e.pipeline->Engine().GetInstrument().symbol.c_str(), e.stats.resolved ? "" : "(unresolved)",
+                 static_cast<unsigned long long>(e.stats.events),
+                 static_cast<unsigned long long>(e.stats.ts_regressions));
+}
+
 }  // namespace
 
 void PrintCatalogText(std::FILE* out, const FeatureCatalog& catalog) {
     std::fprintf(out, "plugins (%zu)\n", catalog.PluginCount());
     for (std::size_t i = 0; i < catalog.PluginCount(); ++i) {
         const auto& p = catalog.Plugin(i);
-        std::fprintf(out, "  %-16s %s  sdk=%s requires=%s cols=%u", catalog.PluginName(i).c_str(), p.Path().c_str(),
-                     p.Schema().sdk_version, RequiresName(p.Schema().requirement), p.Schema().ncol);
+        std::fprintf(out, "  %-16s %s  sdk=%s feed=%s requires=%s cols=%u", catalog.PluginName(i).c_str(),
+                     p.Path().c_str(), p.Schema().sdk_version, FeedNameOf(p), RequiresName(p.Schema().requirement),
+                     p.Schema().ncol);
         for (const auto& [k, v] : catalog.PluginParams(i)) std::fprintf(out, "  %s=%s", k.c_str(), v.c_str());
         std::fprintf(out, "\n");
     }
@@ -71,10 +100,10 @@ void PrintCatalogJson(std::FILE* out, const FeatureCatalog& catalog) {
     std::fprintf(out, "{\n  \"plugins\": [");
     for (std::size_t i = 0; i < catalog.PluginCount(); ++i) {
         const auto& p = catalog.Plugin(i);
-        std::fprintf(out, "%s\n    {\"name\": %s, \"path\": %s, \"sdk_version\": %s, \"requires\": \"%s\", \"ncol\": %u, \"params\": {",
+        std::fprintf(out, "%s\n    {\"name\": %s, \"path\": %s, \"sdk_version\": %s, \"feed\": \"%s\", \"requires\": \"%s\", \"ncol\": %u, \"params\": {",
                      i ? "," : "", JsonString(catalog.PluginName(i)).c_str(), JsonString(p.Path()).c_str(),
-                     JsonString(p.Schema().sdk_version).c_str(), RequiresName(p.Schema().requirement),
-                     p.Schema().ncol);
+                     JsonString(p.Schema().sdk_version).c_str(), FeedNameOf(p),
+                     RequiresName(p.Schema().requirement), p.Schema().ncol);
         const auto& params = catalog.PluginParams(i);
         for (std::size_t j = 0; j < params.size(); ++j) {
             std::fprintf(out, "%s%s: %s", j ? ", " : "", JsonString(params[j].first).c_str(),
@@ -104,20 +133,8 @@ void PrintCatalogJson(std::FILE* out, const FeatureCatalog& catalog) {
     std::fprintf(out, "\n  ]\n}\n");
 }
 
-void PrintFeedReport(std::FILE* out, const PipelineTable& table, const RunResult& result) {
-    const FeedStats& f = table.Stats();
-    std::fprintf(out, "feed  events=%llu instruments=%zu ts_regressions=%llu instrument_unknown=%llu stalls=%llu first_ts=%lld last_ts=%lld adapter_status=%d%s\n",
-                 static_cast<unsigned long long>(f.events), table.InstrumentCount(),
-                 static_cast<unsigned long long>(f.ts_regressions),
-                 static_cast<unsigned long long>(f.instrument_unknown),
-                 static_cast<unsigned long long>(result.stalls), static_cast<long long>(f.first_ts),
-                 static_cast<long long>(f.last_ts), result.adapter_status, result.interrupted ? " interrupted" : "");
-
-    if (result.has_writer) {
-        std::fprintf(out, "writer  rows=%llu stalls=%llu%s%s\n", static_cast<unsigned long long>(result.rows_written),
-                     static_cast<unsigned long long>(result.writer_stalls),
-                     result.writer_error.empty() ? "" : " error=", result.writer_error.c_str());
-    }
+void PrintFeedReport(std::FILE* out, const PipelineTable<nq_mbo>& table, const RunResult& result) {
+    PrintFeedSummary(out, table, result);
 
     Orderbook::Stats total;
     for (const auto& e : table.Entries()) {
@@ -156,14 +173,21 @@ void PrintFeedReport(std::FILE* out, const PipelineTable& table, const RunResult
 
     for (const auto& e : table.Entries()) {
         if (!e.pipeline) continue;
-        const auto& spec = e.pipeline->Engine().GetInstrument();
         const Orderbook& book = e.pipeline->Book();
-        std::fprintf(out, "  %-6u %-16s %s events=%llu ts_regressions=%llu orders=%zu bid_levels=%zu ask_levels=%zu  ",
-                     e.id, spec.symbol.c_str(), e.stats.resolved ? "" : "(unresolved)",
-                     static_cast<unsigned long long>(e.stats.events),
-                     static_cast<unsigned long long>(e.stats.ts_regressions), book.OrderCount(),
-                     book.BidLevelCount(), book.AskLevelCount());
+        PrintInstrumentSummary(out, e);
+        std::fprintf(out, " orders=%zu bid_levels=%zu ask_levels=%zu  ", book.OrderCount(), book.BidLevelCount(),
+                     book.AskLevelCount());
         print_stats(book.GetStats());
+        std::fprintf(out, "\n");
+    }
+}
+
+void PrintFeedReport(std::FILE* out, const PipelineTable<nq_ohlcv>& table, const RunResult& result) {
+    PrintFeedSummary(out, table, result);
+
+    for (const auto& e : table.Entries()) {
+        if (!e.pipeline) continue;
+        PrintInstrumentSummary(out, e);
         std::fprintf(out, "\n");
     }
 }

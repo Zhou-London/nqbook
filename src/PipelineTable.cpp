@@ -5,14 +5,16 @@
 
 namespace nq {
 
-PipelineTable::PipelineTable(const FeatureCatalog& catalog, Resolver resolver, std::size_t expected_orders,
-                             std::size_t instrument_slots, RowSink* sink)
-    : catalog_(&catalog), resolver_(std::move(resolver)), expected_orders_(expected_orders), sink_(sink) {
+template <class Record>
+PipelineTable<Record>::PipelineTable(const FeatureCatalog& catalog, Resolver resolver, PipelineOptions<Record> options,
+                                     std::size_t instrument_slots, RowSink* sink)
+    : catalog_(&catalog), resolver_(std::move(resolver)), options_(options), sink_(sink) {
     entries_.resize(instrument_slots);
     for (std::size_t i = 0; i < entries_.size(); ++i) entries_[i].id = static_cast<std::uint32_t>(i);
 }
 
-PipelineTable::Entry& PipelineTable::Resolve(std::uint32_t instrument) {
+template <class Record>
+typename PipelineTable<Record>::Entry& PipelineTable<Record>::Resolve(std::uint32_t instrument) {
     if (instrument >= entries_.size()) {
         const std::size_t old = entries_.size();
         entries_.resize(std::max<std::size_t>(instrument + 1, old * 2));
@@ -27,58 +29,65 @@ PipelineTable::Entry& PipelineTable::Resolve(std::uint32_t instrument) {
         ++stats_.instrument_unknown;
         spec = Instrument{instrument, "#" + std::to_string(instrument), 1, 1};
     }
-    entry.pipeline = std::make_unique<Pipeline>(*catalog_, std::move(*spec), expected_orders_, sink_);
+    entry.pipeline = std::make_unique<Pipeline<Record>>(*catalog_, std::move(*spec), options_, sink_);
+    entry.live_index = static_cast<std::uint32_t>(live_.size());
     live_.push_back(entry.pipeline.get());
     return entry;
 }
 
-nlib::qty_t PipelineTable::Apply(const nq_mbo& m) {
-    Entry& e = Resolve(m.instrument);
+template <class Record>
+void PipelineTable<Record>::Apply(const Record& record) {
+    Entry& e = Resolve(record.instrument);
 
-    if (stats_.events == 0) stats_.first_ts = m.ts;
-    else if (m.ts < stats_.last_ts) ++stats_.ts_regressions;
-    stats_.last_ts = m.ts;
+    if (stats_.events == 0) stats_.first_ts = record.ts;
+    else if (record.ts < stats_.last_ts) ++stats_.ts_regressions;
+    stats_.last_ts = record.ts;
     ++stats_.events;
 
-    if (e.stats.events == 0) e.stats.first_ts = m.ts;
-    else if (m.ts < e.stats.last_ts) ++e.stats.ts_regressions;
-    e.stats.last_ts = m.ts;
+    if (e.stats.events == 0) e.stats.first_ts = record.ts;
+    else if (record.ts < e.stats.last_ts) ++e.stats.ts_regressions;
+    e.stats.last_ts = record.ts;
     ++e.stats.events;
 
-    for (Pipeline* p : live_) p->Engine().Advance(m.ts);
-    return e.pipeline->Apply(m);
+    timers_.AdvanceTo(record.ts, [&](std::uint32_t key) {
+        FeatureEngine& woken = live_[key]->Engine();
+        woken.Advance(record.ts);
+        timers_.WakeBy(key, woken.Due());
+    });
+    FeatureEngine& engine = e.pipeline->Engine();
+    engine.Advance(record.ts);
+    e.pipeline->Apply(record);
+    timers_.WakeBy(e.live_index, engine.Due());
 }
 
-std::vector<Instrument> PipelineTable::Instruments() const {
-    std::vector<Instrument> out;
-    out.reserve(live_.size());
-    for (const Entry& e : entries_) {
-        if (e.pipeline) out.push_back(e.pipeline->Engine().GetInstrument());
-    }
-    return out;
+template <class Record>
+void PipelineTable<Record>::Close() {
+    for (Pipeline<Record>* p : live_) p->Close();
 }
 
-void PipelineTable::Close() {
-    for (Pipeline* p : live_) p->Close();
-}
-
-std::size_t PipelineTable::Consume(Orderbook::Queue& q, std::size_t max) {
+template <class Record>
+std::size_t PipelineTable<Record>::Consume(nlib::single_queue<Record>& q, std::size_t max) {
     std::size_t n = 0;
     while (n < max) {
-        auto m = q.try_pop();
-        if (!m) break;
-        Apply(*m);
+        auto record = q.try_pop();
+        if (!record) break;
+        Apply(*record);
         ++n;
     }
     return n;
 }
 
-Pipeline* PipelineTable::Find(std::uint32_t instrument) noexcept {
+template <class Record>
+Pipeline<Record>* PipelineTable<Record>::Find(std::uint32_t instrument) noexcept {
     return instrument < entries_.size() ? entries_[instrument].pipeline.get() : nullptr;
 }
 
-const Pipeline* PipelineTable::Find(std::uint32_t instrument) const noexcept {
+template <class Record>
+const Pipeline<Record>* PipelineTable<Record>::Find(std::uint32_t instrument) const noexcept {
     return instrument < entries_.size() ? entries_[instrument].pipeline.get() : nullptr;
 }
+
+template class PipelineTable<nq_mbo>;
+template class PipelineTable<nq_ohlcv>;
 
 }  // namespace nq

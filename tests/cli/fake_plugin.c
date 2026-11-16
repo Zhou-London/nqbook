@@ -1,7 +1,7 @@
 #include <nq/feature_abi.h>
 
 static const nq_column cols[1] = {{"x", "", "", NQ_COLUMN_SNAPSHOT}};
-static const nq_schema schema = {1u, NQ_SDK_VERSION, NQ_REQUIRES_L1, 1u, cols};
+static const nq_schema schema = {1u, NQ_SDK_VERSION, NQ_REQUIRES_L1, 1u, cols, NQ_FEED_MBO};
 static int state;
 
 NQ_EXPORT const nq_schema* nq_describe(void) { return &schema; }

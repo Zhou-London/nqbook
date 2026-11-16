@@ -29,27 +29,32 @@ struct RunResult {
     std::string writer_error;
 };
 
+template <class Record>
 class Session {
 public:
+    /* ---------- CTR/DTRs ---------- */
     Session(const FeatureCatalog& catalog, const host::AdapterPlugin& adapter, const nq_params& adapter_params,
             std::unique_ptr<ParquetWriter> writer = nullptr,
             std::size_t queue_capacity = defaults::kQueueCapacity,
-            std::size_t expected_orders = defaults::kExpectedOrders);
+            PipelineOptions<Record> options = {});
 
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
 
+    /* ---------- Member Functions ---------- */
     RunResult Run(const std::atomic<bool>& stop, std::size_t batch = defaults::kConsumeBatch);
 
-    PipelineTable& Pipelines() noexcept { return table_; }
-    const PipelineTable& Pipelines() const noexcept { return table_; }
-    const AdapterEngine& Adapter() const noexcept { return adapter_; }
+    /* ---------- Getters ---------- */
+    PipelineTable<Record>& Pipelines() noexcept { return table_; }
+    const PipelineTable<Record>& Pipelines() const noexcept { return table_; }
+    const AdapterEngine<Record>& Adapter() const noexcept { return adapter_; }
     const WriterEngine* Writer() const noexcept { return writer_ ? &*writer_ : nullptr; }
 
 private:
-    AdapterEngine adapter_;
+    /* ---------- Internal States ---------- */
+    AdapterEngine<Record> adapter_;
     std::optional<WriterEngine> writer_;
-    PipelineTable table_;
+    PipelineTable<Record> table_;
 };
 
 }  // namespace nq

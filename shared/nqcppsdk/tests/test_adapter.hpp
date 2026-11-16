@@ -54,4 +54,46 @@ private:
     std::vector<nq::Instrument> table_;
 };
 
+class SyntheticOhlcv : public nq::AdapterBase {
+public:
+    static constexpr const char* kName = "synthetic_ohlcv";
+
+    explicit SyntheticOhlcv(const nq::Params& p)
+        : count_(p.RequireInt("count")),
+          instruments_(p.GetInt("instruments", 1)),
+          period_(p.GetInt("period", 60)) {
+        for (std::int64_t i = 0; i < instruments_; ++i) {
+            table_.push_back(nq::Instrument{static_cast<std::uint32_t>(i + 1), "SYN" + std::to_string(i + 1), 10, 1});
+        }
+    }
+
+    nq::Next Next(nq::Ohlcv& out) {
+        if (next_ >= count_) return nq::Next::End;
+        const std::int64_t i = next_++;
+        const std::int64_t period_index = i / instruments_;
+        out.ts = period_index * period_;
+        out.open = 100 + period_index;
+        out.high = out.open + 2;
+        out.low = out.open - 1;
+        out.close = out.open + 1;
+        out.volume = 0.5 + static_cast<double>(i);
+        out.instrument = static_cast<std::uint32_t>(i % instruments_ + 1);
+        return nq::Next::Event;
+    }
+
+    const nq::Instrument* FindInstrument(std::uint32_t id) const noexcept {
+        for (const auto& i : table_) {
+            if (i.id == id) return &i;
+        }
+        return nullptr;
+    }
+
+private:
+    std::int64_t count_;
+    std::int64_t instruments_;
+    std::int64_t period_;
+    std::int64_t next_ = 0;
+    std::vector<nq::Instrument> table_;
+};
+
 }  // namespace nq_test

@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <vector>
 
+#include <nq/instrument.hpp>
+
 namespace nq {
 
 struct FeatureRow {
@@ -15,6 +17,7 @@ struct FeatureRow {
 class RowSink {
 public:
     virtual ~RowSink() = default;
+    virtual void Register(const Instrument& instrument) = 0;
     virtual void Push(FeatureRow row) = 0;
 };
 

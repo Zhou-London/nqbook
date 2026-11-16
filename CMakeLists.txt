@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(orderbook
-    VERSION 2.0.0
+project(nqhpc
+    VERSION 0.1.3
     LANGUAGES C CXX
 )
 
@@ -23,7 +23,7 @@ FetchContent_Declare(nlib
 )
 FetchContent_Declare(nqcppsdk
     GIT_REPOSITORY https://github.com/Zhou-London/nqcppsdk.git
-    GIT_TAG v0.1.2
+    GIT_TAG v0.2.0
     GIT_SHALLOW ON
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shared/nqcppsdk
 )
@@ -37,7 +37,8 @@ FetchContent_MakeAvailable(nlib nqcppsdk cli11)
 find_package(Arrow REQUIRED CONFIG)
 find_package(Parquet REQUIRED CONFIG)
 
-add_library(nqbook_core STATIC
+add_library(nqhpc_core STATIC
+    src/Clock/TimerWheel.cpp
     src/Orderbook.cpp
     src/Config.cpp
     src/Feature/OrderbookView.cpp
@@ -52,20 +53,20 @@ add_library(nqbook_core STATIC
     src/Writer/ParquetWriter.cpp
     src/Writer/WriterEngine.cpp
 )
-target_include_directories(nqbook_core PUBLIC
+target_include_directories(nqhpc_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(nqbook_core PUBLIC nlib::nlib nqcppsdk::nqcppsdk Parquet::parquet_shared ${CMAKE_DL_LIBS})
-target_compile_options(nqbook_core PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(nqhpc_core PUBLIC nlib::nlib nqcppsdk::nqcppsdk Parquet::parquet_shared ${CMAKE_DL_LIBS})
+target_compile_options(nqhpc_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_subdirectory(plugins)
 
-add_executable(nqbook src/main.cpp)
-target_link_libraries(nqbook PRIVATE nqbook_core CLI11::CLI11)
-target_compile_options(nqbook PRIVATE -Wall -Wextra -Wpedantic)
+add_executable(nqhpc src/main.cpp)
+target_link_libraries(nqhpc PRIVATE nqhpc_core CLI11::CLI11)
+target_compile_options(nqhpc PRIVATE -Wall -Wextra -Wpedantic)
 
-option(ORDERBOOK_BUILD_TESTS "Build the orderbook tests" ${PROJECT_IS_TOP_LEVEL})
-if(ORDERBOOK_BUILD_TESTS)
+option(NQHPC_BUILD_TESTS "Build the nqhpc tests" ${PROJECT_IS_TOP_LEVEL})
+if(NQHPC_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()

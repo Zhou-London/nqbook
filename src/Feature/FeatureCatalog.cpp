@@ -5,6 +5,16 @@
 
 namespace nq {
 
+namespace {
+
+void RequireTriggerFitsFeed(const SamplerSpec& spec, Feed feed) {
+    if (spec.trigger == Trigger::Trades && feed != Feed::MBO) {
+        throw FeedMismatchError("trades sampler needs an MBO feed: " + spec.name);
+    }
+}
+
+}  // namespace
+
 std::size_t FeatureCatalog::LoadPlugin(const std::string& path, std::string name, KeyValues params) {
     if (!samplers_.empty()) throw std::logic_error("LoadPlugin after AddSampler");
     if (name.empty()) name = std::filesystem::path(path).stem().string();
@@ -13,6 +23,12 @@ std::size_t FeatureCatalog::LoadPlugin(const std::string& path, std::string name
     }
 
     host::Plugin plugin(path);
+    const Feed feed = static_cast<Feed>(plugin.Schema().feed);
+    if (!plugins_.empty() && feed != feed_) {
+        throw FeedMismatchError("plugin " + name + " reads " + FeedName(feed) + ", earlier plugins read " +
+                                FeedName(feed_));
+    }
+    feed_ = feed;
     const std::size_t index = plugins_.size();
     for (std::size_t i = 0; i < plugin.Schema().ncol; ++i) {
         const nq_column& c = plugin.Columns()[i];
@@ -35,6 +51,7 @@ std::size_t FeatureCatalog::FindColumn(std::string_view name) const {
 void FeatureCatalog::AddSampler(SamplerSpec spec) {
     if (spec.every <= 0) throw std::invalid_argument("sampler period must be positive: " + spec.name);
     if (FindSampler(spec.name)) throw std::invalid_argument("duplicate sampler name: " + spec.name);
+    RequireTriggerFitsFeed(spec, feed_);
 
     SamplerTemplate t;
     if (spec.columns.empty()) {
@@ -51,6 +68,14 @@ void FeatureCatalog::AddSampler(SamplerSpec spec) {
     }
     t.spec = std::move(spec);
     samplers_.push_back(std::move(t));
+}
+
+void FeatureCatalog::RequireFeed(Feed adapter_feed) const {
+    if (!plugins_.empty() && feed_ != adapter_feed) {
+        throw FeedMismatchError(std::string("plugins read ") + FeedName(feed_) + ", the adapter sends " +
+                                FeedName(adapter_feed));
+    }
+    for (const auto& s : samplers_) RequireTriggerFitsFeed(s.spec, adapter_feed);
 }
 
 const SamplerTemplate* FeatureCatalog::FindSampler(std::string_view name) const noexcept {

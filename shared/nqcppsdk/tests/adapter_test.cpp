@@ -44,7 +44,8 @@ static int TestPlugin() {
     nq::host::AdapterPlugin plugin(NQ_TEST_ADAPTER_PATH);
     CHECK(plugin.Schema().abi_hash == NQ_ADAPTER_ABI_HASH);
     CHECK(std::strcmp(plugin.Schema().name, "synthetic") == 0);
-    CHECK(plugin.Schema().provides == NQ_REQUIRES_MBO);
+    CHECK(plugin.Schema().provides == NQ_REQUIRES_MBO && plugin.Schema().feed == NQ_FEED_MBO);
+    CHECK(plugin.Fns().next != nullptr && plugin.Fns().next_ohlcv == nullptr);
     CHECK(std::strcmp(plugin.Schema().sdk_version, NQ_SDK_VERSION) == 0);
 
     nq::ParamsBuilder pb;
@@ -88,9 +89,51 @@ static int TestPlugin() {
     return 0;
 }
 
+static_assert(nq::AdapterType<nq_test::Synthetic> && !nq::OhlcvAdapterType<nq_test::Synthetic>);
+static_assert(nq::OhlcvAdapterType<nq_test::SyntheticOhlcv> && !nq::AdapterType<nq_test::SyntheticOhlcv>);
+
+static int TestOhlcvSandbox() {
+    nq::ParamsBuilder pb;
+    pb.Set("count", "4").Set("instruments", "2");
+    nq::testing::AdapterSandbox<nq_test::SyntheticOhlcv> sb(pb.Build());
+    const auto records = sb.Drain();
+    CHECK(sb.LastStatus() == nq::Next::End && records.size() == 4);
+    CHECK(records[0].ts == 0 && records[0].instrument == 1);
+    CHECK(records[1].ts == 0 && records[1].instrument == 2);
+    CHECK(records[2].ts == 60 && records[2].open == 101 && records[2].high == 103);
+    CHECK(records[2].low == 100 && records[2].close == 102);
+    CHECK(records[3].ts == 60 && records[3].volume == 3.5);
+    CHECK(sb.Adapter().FindInstrument(2)->symbol == "SYN2");
+    return 0;
+}
+
+static int TestOhlcvPlugin() {
+    nq::host::AdapterPlugin plugin(NQ_TEST_OHLCV_ADAPTER_PATH);
+    CHECK(plugin.Schema().abi_hash == NQ_ADAPTER_ABI_HASH);
+    CHECK(std::strcmp(plugin.Schema().name, "synthetic_ohlcv") == 0);
+    CHECK(plugin.Schema().feed == NQ_FEED_OHLCV && plugin.Schema().provides == NQ_REQUIRES_NONE);
+    CHECK(plugin.Fns().next_ohlcv != nullptr && plugin.Fns().next == nullptr);
+
+    nq::ParamsBuilder pb;
+    pb.Set("count", "3").Set("period", "10");
+    nq::host::AdapterInstance inst = plugin.Create(*pb.Build());
+    CHECK(std::strcmp(inst.Instrument(1)->symbol, "SYN1") == 0 && !inst.Instrument(2));
+
+    nq_ohlcv ohlcv;
+    int events = 0;
+    while (inst.Next(ohlcv) == NQ_NEXT_EVENT) {
+        CHECK(ohlcv.ts == 10 * events && ohlcv.close == 101 + events && ohlcv.instrument == 1);
+        ++events;
+    }
+    CHECK(events == 3 && inst.Next(ohlcv) == NQ_NEXT_END);
+    return 0;
+}
+
 int main() {
     if (int r = TestSandbox()) return r;
     if (int r = TestPlugin()) return r;
+    if (int r = TestOhlcvSandbox()) return r;
+    if (int r = TestOhlcvPlugin()) return r;
     std::printf("ok adapter_abi_hash=%llx\n", static_cast<unsigned long long>(NQ_ADAPTER_ABI_HASH));
     return 0;
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 #include <type_traits>
 
@@ -15,6 +16,7 @@
 namespace nq {
 
 enum class Provides : std::uint8_t {
+    None = NQ_REQUIRES_NONE,
     L1 = NQ_REQUIRES_L1,
     MBP = NQ_REQUIRES_MBP,
     MBO = NQ_REQUIRES_MBO
@@ -56,33 +58,59 @@ struct AdapterBase {
     const Instrument* FindInstrument(std::uint32_t) const noexcept { return nullptr; }
 };
 
+namespace detail {
+
 template <class A>
-concept AdapterType =
+concept AdapterCore =
     std::is_constructible_v<A, const Params&> &&
-    requires(A& a, const A& ca, Mbo& out, std::uint32_t id) {
+    requires(const A& ca, std::uint32_t id) {
         { A::kName } -> std::convertible_to<const char*>;
-        { a.Next(out) } -> std::same_as<Next>;
         { ca.FindInstrument(id) } noexcept -> std::convertible_to<const Instrument*>;
     };
+
+}  // namespace detail
+
+template <class A>
+concept AdapterType = detail::AdapterCore<A> && requires(A& a, Mbo& out) {
+    { a.Next(out) } -> std::same_as<Next>;
+};
+
+template <class A>
+concept OhlcvAdapterType = detail::AdapterCore<A> && requires(A& a, Ohlcv& out) {
+    { a.Next(out) } -> std::same_as<Next>;
+};
 
 namespace detail {
 
 template <class A>
 constexpr std::uint8_t ProvidesOf() noexcept {
     if constexpr (requires { A::kProvides; }) return static_cast<std::uint8_t>(A::kProvides);
+    else if constexpr (OhlcvAdapterType<A>) return NQ_REQUIRES_NONE;
     else return NQ_REQUIRES_MBO;
+}
+
+template <class A>
+int NextRaw(A& adapter, nq_mbo& out) {
+    Mbo m;
+    const Next r = adapter.Next(m);
+    if (r == Next::Event) out = m.Raw();
+    return static_cast<int>(r);
+}
+
+template <class A>
+int NextRaw(A& adapter, nq_ohlcv& out) {
+    return static_cast<int>(adapter.Next(out));
 }
 
 }  // namespace detail
 
 }  // namespace nq
 
-#define NQ_ADAPTER(Type)                                                                        \
-    static_assert(::nq::AdapterType<Type>);                                                     \
+#define NQ_DETAIL_ADAPTER(Type, feed, next_symbol, raw_record)                                  \
     extern "C" {                                                                                \
     NQ_EXPORT const nq_adapter_schema* nq_adapter_describe(void) {                              \
         static const nq_adapter_schema schema{NQ_ADAPTER_ABI_HASH, NQ_SDK_VERSION, Type::kName, \
-                                              ::nq::detail::ProvidesOf<Type>()};                \
+                                              ::nq::detail::ProvidesOf<Type>(), feed};          \
         return &schema;                                                                         \
     }                                                                                           \
     NQ_EXPORT void* nq_adapter_init(const nq_params* p) {                                       \
@@ -92,12 +120,9 @@ constexpr std::uint8_t ProvidesOf() noexcept {
             return nullptr;                                                                     \
         }                                                                                       \
     }                                                                                           \
-    NQ_EXPORT int nq_adapter_next(void* s, nq_mbo* out) {                                       \
+    NQ_EXPORT int next_symbol(void* s, raw_record* out) {                                       \
         try {                                                                                   \
-            ::nq::Mbo m;                                                                        \
-            const ::nq::Next r = static_cast<Type*>(s)->Next(m);                                \
-            if (r == ::nq::Next::Event) *out = m.Raw();                                         \
-            return static_cast<int>(r);                                                         \
+            return ::nq::detail::NextRaw(*static_cast<Type*>(s), *out);                         \
         } catch (...) {                                                                         \
             return NQ_NEXT_ERROR;                                                               \
         }                                                                                       \
@@ -110,3 +135,13 @@ constexpr std::uint8_t ProvidesOf() noexcept {
     }                                                                                           \
     NQ_EXPORT void nq_adapter_destroy(void* s) { delete static_cast<Type*>(s); }                \
     }
+
+#define NQ_ADAPTER(Type)                                                              \
+    static_assert(::nq::AdapterType<Type> && !::nq::OhlcvAdapterType<Type>,           \
+                  "NQ_ADAPTER needs Next(nq::Mbo&) as the only Next");                \
+    NQ_DETAIL_ADAPTER(Type, NQ_FEED_MBO, nq_adapter_next, nq_mbo)
+
+#define NQ_OHLCV_ADAPTER(Type)                                                        \
+    static_assert(::nq::OhlcvAdapterType<Type> && !::nq::AdapterType<Type>,           \
+                  "NQ_OHLCV_ADAPTER needs Next(nq::Ohlcv&) as the only Next");        \
+    NQ_DETAIL_ADAPTER(Type, NQ_FEED_OHLCV, nq_adapter_next_ohlcv, nq_ohlcv)

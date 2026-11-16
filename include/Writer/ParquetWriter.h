@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <span>
+#include <unordered_map>
 #include <vector>
 
 #include <nq/instrument.hpp>
@@ -27,8 +27,8 @@ public:
     ParquetWriter(const ParquetWriter&) = delete;
     ParquetWriter& operator=(const ParquetWriter&) = delete;
 
+    void Register(const Instrument& instrument);
     void Write(const FeatureRow& row);
-    void WriteInstruments(std::span<const Instrument> instruments);
     void Close();
 
     const std::filesystem::path& Dir() const noexcept { return dir_; }
@@ -42,10 +42,12 @@ private:
     struct Table;
 
     void Flush(Table& t);
+    void WriteInstruments();
 
     std::filesystem::path dir_;
     ParquetOptions options_;
     std::vector<std::unique_ptr<Table>> tables_;
+    std::unordered_map<std::uint32_t, Instrument> instruments_;
     std::filesystem::path instruments_path_;
     bool instruments_written_ = false;
     bool closed_ = false;

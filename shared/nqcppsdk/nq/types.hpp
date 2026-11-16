@@ -16,6 +16,10 @@ enum class Action : std::uint8_t {
     Clear = NQ_CLEAR
 };
 
+enum class Feed : std::uint8_t { MBO = NQ_FEED_MBO, OHLCV = NQ_FEED_OHLCV };
+
+using Ohlcv = nq_ohlcv;
+
 constexpr Side Opposite(Side s) noexcept { return s == Side::Bid ? Side::Ask : Side::Bid; }
 
 }  // namespace nq

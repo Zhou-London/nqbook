@@ -1,5 +1,6 @@
 #include <Writer/ParquetWriter.h>
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -52,6 +53,7 @@ struct ParquetWriter::Table {
     std::shared_ptr<arrow::Schema> schema;
     std::unique_ptr<parquet::arrow::FileWriter> writer;
     arrow::UInt32Builder instrument;
+    arrow::StringBuilder symbol;
     arrow::TimestampBuilder ts;
     std::vector<std::unique_ptr<arrow::DoubleBuilder>> columns;
     std::int64_t pending = 0;
@@ -78,6 +80,7 @@ ParquetWriter::ParquetWriter(const FeatureCatalog& catalog, std::filesystem::pat
     for (const SamplerTemplate& t : catalog.Samplers()) {
         arrow::FieldVector fields;
         fields.push_back(arrow::field("instrument", arrow::uint32(), false));
+        fields.push_back(arrow::field("symbol", arrow::utf8(), false));
         fields.push_back(arrow::field("ts", arrow::timestamp(arrow::TimeUnit::NANO, "UTC"), false));
         for (const auto& name : t.names) fields.push_back(arrow::field(name, arrow::float64(), false));
         tables_.push_back(std::make_unique<Table>(dir_ / (t.spec.name + ".parquet"), arrow::schema(std::move(fields)),
@@ -106,6 +109,13 @@ std::vector<std::filesystem::path> ParquetWriter::Files() const {
     return out;
 }
 
+void ParquetWriter::Register(const Instrument& instrument) {
+    if (closed_) throw std::logic_error("ParquetWriter::Register after Close");
+    if (!instruments_.emplace(instrument.id, instrument).second) {
+        throw std::invalid_argument("instrument " + std::to_string(instrument.id) + " is registered twice");
+    }
+}
+
 void ParquetWriter::Write(const FeatureRow& row) {
     if (closed_) throw std::logic_error("ParquetWriter::Write after Close");
     if (row.sampler >= tables_.size()) throw std::out_of_range("FeatureRow.sampler out of range");
@@ -114,7 +124,13 @@ void ParquetWriter::Write(const FeatureRow& row) {
         throw std::invalid_argument(t.path.string() + ": row has " + std::to_string(row.values.size()) +
                                     " values, schema has " + std::to_string(t.columns.size()));
     }
+    const auto known = instruments_.find(row.instrument);
+    if (known == instruments_.end()) {
+        throw std::invalid_argument(t.path.string() + ": instrument " + std::to_string(row.instrument) +
+                                    " is not registered");
+    }
     Check(t.instrument.Append(row.instrument), t.path);
+    Check(t.symbol.Append(known->second.symbol), t.path);
     Check(t.ts.Append(row.ts), t.path);
     for (std::size_t i = 0; i < t.columns.size(); ++i) Check(t.columns[i]->Append(row.values[i]), t.path);
     if (++t.pending >= options_.row_group_rows) Flush(t);
@@ -123,8 +139,9 @@ void ParquetWriter::Write(const FeatureRow& row) {
 void ParquetWriter::Flush(Table& t) {
     if (t.pending == 0) return;
     arrow::ArrayVector arrays;
-    arrays.reserve(2 + t.columns.size());
+    arrays.reserve(3 + t.columns.size());
     arrays.push_back(Unwrap(t.instrument.Finish(), t.path));
+    arrays.push_back(Unwrap(t.symbol.Finish(), t.path));
     arrays.push_back(Unwrap(t.ts.Finish(), t.path));
     for (auto& c : t.columns) arrays.push_back(Unwrap(c->Finish(), t.path));
     const auto batch = arrow::RecordBatch::Make(t.schema, t.pending, std::move(arrays));
@@ -133,8 +150,12 @@ void ParquetWriter::Flush(Table& t) {
     t.pending = 0;
 }
 
-void ParquetWriter::WriteInstruments(std::span<const Instrument> instruments) {
-    if (closed_) throw std::logic_error("ParquetWriter::WriteInstruments after Close");
+void ParquetWriter::WriteInstruments() {
+    std::vector<const Instrument*> by_id;
+    by_id.reserve(instruments_.size());
+    for (const auto& [id, instrument] : instruments_) by_id.push_back(&instrument);
+    std::ranges::sort(by_id, {}, &Instrument::id);
+
     const auto schema = arrow::schema({
         arrow::field("instrument", arrow::uint32(), false),
         arrow::field("symbol", arrow::utf8(), false),
@@ -145,18 +166,18 @@ void ParquetWriter::WriteInstruments(std::span<const Instrument> instruments) {
     arrow::StringBuilder symbols;
     arrow::Int64Builder ticks;
     arrow::Int64Builder lots;
-    for (const Instrument& i : instruments) {
-        Check(ids.Append(i.id), instruments_path_);
-        Check(symbols.Append(i.symbol), instruments_path_);
-        Check(ticks.Append(i.tick_size), instruments_path_);
-        Check(lots.Append(i.lot_size), instruments_path_);
+    for (const Instrument* i : by_id) {
+        Check(ids.Append(i->id), instruments_path_);
+        Check(symbols.Append(i->symbol), instruments_path_);
+        Check(ticks.Append(i->tick_size), instruments_path_);
+        Check(lots.Append(i->lot_size), instruments_path_);
     }
     arrow::ArrayVector arrays;
     arrays.push_back(Unwrap(ids.Finish(), instruments_path_));
     arrays.push_back(Unwrap(symbols.Finish(), instruments_path_));
     arrays.push_back(Unwrap(ticks.Finish(), instruments_path_));
     arrays.push_back(Unwrap(lots.Finish(), instruments_path_));
-    const auto batch = arrow::RecordBatch::Make(schema, static_cast<std::int64_t>(instruments.size()), std::move(arrays));
+    const auto batch = arrow::RecordBatch::Make(schema, static_cast<std::int64_t>(by_id.size()), std::move(arrays));
 
     auto writer = OpenWriter(instruments_path_, *schema, options_.row_group_rows);
     Check(writer->WriteRecordBatch(*batch), instruments_path_);
@@ -171,6 +192,7 @@ void ParquetWriter::Close() {
         Flush(*t);
         Check(t->writer->Close(), t->path);
     }
+    WriteInstruments();
 }
 
 }  // namespace nq

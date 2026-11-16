@@ -70,6 +70,7 @@ inline constexpr std::uint8_t kSnapshot = NQ_COLUMN_SNAPSHOT;
 inline constexpr std::uint8_t kCumulative = NQ_COLUMN_CUMULATIVE;
 
 enum class Requires : std::uint8_t {
+    None = NQ_REQUIRES_NONE,
     L1 = NQ_REQUIRES_L1,
     MBP = NQ_REQUIRES_MBP,
     MBO = NQ_REQUIRES_MBO
@@ -91,18 +92,36 @@ constexpr std::array<Column, N> MakeColumns(const ColumnDef (&cols)[N]) {
 
 struct FeatureBase {
     void OnEvent(const Event&, const BookView&) noexcept {}
+    void OnOhlcv(const Ohlcv&) noexcept {}
     void OnControl(const Control&) noexcept {}
 };
 
+namespace detail {
+
+template <class F>
+concept FeatureCore =
+    std::is_constructible_v<F, const Params&> &&
+    requires(F& f, const Control& c) {
+        { F::kColumns.size() } -> std::convertible_to<std::size_t>;
+        { f.OnControl(c) } noexcept;
+    };
+
+}  // namespace detail
+
 template <class F>
 concept FeatureType =
-    std::is_constructible_v<F, const Params&> &&
-    requires(F& f, const F& cf, const Event& e, const BookView& b, const Control& c,
-             std::span<double> out) {
-        { F::kColumns.size() } -> std::convertible_to<std::size_t>;
+    detail::FeatureCore<F> &&
+    requires(F& f, const F& cf, const Event& e, const BookView& b, std::span<double> out) {
         { f.OnEvent(e, b) } noexcept;
         { cf.Read(out, b) } noexcept;
-        { f.OnControl(c) } noexcept;
+    };
+
+template <class F>
+concept OhlcvFeatureType =
+    detail::FeatureCore<F> &&
+    requires(F& f, const F& cf, const Ohlcv& ohlcv, std::span<double> out) {
+        { f.OnOhlcv(ohlcv) } noexcept;
+        { cf.Read(out) } noexcept;
     };
 
 namespace detail {
@@ -129,32 +148,57 @@ const Params& Same(const Params& p) noexcept { return p; }
 
 }  // namespace detail
 
-template <FeatureType... Fs>
+template <class... Fs>
+    requires(FeatureType<Fs> && ...) || (OhlcvFeatureType<Fs> && ...)
 class Bundle {
     static_assert(sizeof...(Fs) > 0);
 
 public:
+    static constexpr Feed kFeed = (FeatureType<Fs> && ...) ? Feed::MBO : Feed::OHLCV;
     static constexpr std::size_t kNcol = (Fs::kColumns.size() + ... + 0);
     static constexpr std::array<Column, kNcol> kColumns = detail::Concat(Fs::kColumns...);
-    static constexpr std::uint8_t kRequires = std::max({detail::RequiresOf<Fs>()...});
+    static constexpr std::uint8_t kRequires =
+        kFeed == Feed::MBO ? std::max({detail::RequiresOf<Fs>()...}) : std::uint8_t{NQ_REQUIRES_NONE};
 
     static const nq_schema* Schema() noexcept {
         static const nq_schema schema{NQ_ABI_HASH, NQ_SDK_VERSION, kRequires,
-                                      static_cast<std::uint32_t>(kNcol), kColumns.data()};
+                                      static_cast<std::uint32_t>(kNcol), kColumns.data(),
+                                      static_cast<std::uint8_t>(kFeed)};
         return &schema;
     }
 
     explicit Bundle(const Params& p) : features_(detail::Same<Fs>(p)...) {}
 
-    void OnEvent(const Event& e, const BookView& b) noexcept {
+    void OnEvent(const Event& e, const BookView& b) noexcept
+        requires(kFeed == Feed::MBO)
+    {
         std::apply([&](auto&... f) { (f.OnEvent(e, b), ...); }, features_);
     }
 
-    void Read(std::span<double> out, const BookView& b) const noexcept {
+    void Read(std::span<double> out, const BookView& b) const noexcept
+        requires(kFeed == Feed::MBO)
+    {
         std::size_t off = 0;
         std::apply(
             [&](const auto&... f) {
                 ((f.Read(out.subspan(off, ColsOf(f)), b), off += ColsOf(f)), ...);
+            },
+            features_);
+    }
+
+    void OnOhlcv(const Ohlcv& ohlcv) noexcept
+        requires(kFeed == Feed::OHLCV)
+    {
+        std::apply([&](auto&... f) { (f.OnOhlcv(ohlcv), ...); }, features_);
+    }
+
+    void Read(std::span<double> out) const noexcept
+        requires(kFeed == Feed::OHLCV)
+    {
+        std::size_t off = 0;
+        std::apply(
+            [&](const auto&... f) {
+                ((f.Read(out.subspan(off, ColsOf(f))), off += ColsOf(f)), ...);
             },
             features_);
     }
@@ -178,7 +222,7 @@ private:
 
 }  // namespace nq
 
-#define NQ_PLUGIN(...)                                                                       \
+#define NQ_DETAIL_PLUGIN(...)                                                                \
     using nq_plugin_bundle_t = ::nq::Bundle<__VA_ARGS__>;                                    \
     extern "C" {                                                                             \
     NQ_EXPORT const nq_schema* nq_describe(void) { return nq_plugin_bundle_t::Schema(); }   \
@@ -190,6 +234,16 @@ private:
         }                                                                                    \
     }                                                                                        \
     NQ_EXPORT void nq_destroy(void* s) { delete static_cast<nq_plugin_bundle_t*>(s); }       \
+    NQ_EXPORT void nq_on_control(void* s, const nq_control* c) {                             \
+        static_cast<nq_plugin_bundle_t*>(s)->OnControl(::nq::Control(*c));                   \
+    }                                                                                        \
+    }
+
+#define NQ_PLUGIN(...)                                                                       \
+    NQ_DETAIL_PLUGIN(__VA_ARGS__)                                                            \
+    static_assert(nq_plugin_bundle_t::kFeed == ::nq::Feed::MBO,                              \
+                  "NQ_PLUGIN needs features that read a BookView");                          \
+    extern "C" {                                                                             \
     NQ_EXPORT void nq_on_event(void* s, const nq_event* e, const nq_book_view* b) {          \
         static_cast<nq_plugin_bundle_t*>(s)->OnEvent(::nq::Event(*e), ::nq::BookView(b));    \
     }                                                                                        \
@@ -197,7 +251,18 @@ private:
         static_cast<nq_plugin_bundle_t*>(s)->Read(                                           \
             std::span<double>(out, nq_plugin_bundle_t::kNcol), ::nq::BookView(b));           \
     }                                                                                        \
-    NQ_EXPORT void nq_on_control(void* s, const nq_control* c) {                             \
-        static_cast<nq_plugin_bundle_t*>(s)->OnControl(::nq::Control(*c));                   \
+    }
+
+#define NQ_OHLCV_PLUGIN(...)                                                                 \
+    NQ_DETAIL_PLUGIN(__VA_ARGS__)                                                            \
+    static_assert(nq_plugin_bundle_t::kFeed == ::nq::Feed::OHLCV,                            \
+                  "NQ_OHLCV_PLUGIN needs features that read without a BookView");            \
+    extern "C" {                                                                             \
+    NQ_EXPORT void nq_on_ohlcv(void* s, const nq_ohlcv* ohlcv) {                             \
+        static_cast<nq_plugin_bundle_t*>(s)->OnOhlcv(*ohlcv);                                \
+    }                                                                                        \
+    NQ_EXPORT void nq_read(void* s, const nq_book_view*, double* out) {                      \
+        static_cast<nq_plugin_bundle_t*>(s)->Read(                                           \
+            std::span<double>(out, nq_plugin_bundle_t::kNcol));                              \
     }                                                                                        \
     }

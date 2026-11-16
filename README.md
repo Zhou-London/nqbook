@@ -1,44 +1,81 @@
-<p align="center"><img src="https://capsule-render.vercel.app/api?type=pulse&height=240&color=gradient&text=NQBook&fontSize=64&fontAlign=50&fontAlignY=42&desc=v0.1.1&descSize=22&descAlign=50&descAlignY=62" /></p>
+<p align="center"><img src="https://capsule-render.vercel.app/api?type=pulse&height=240&color=gradient&text=NQ%20HPC&fontSize=64&fontAlign=50&fontAlignY=42&desc=v0.1.3&descSize=22&descAlign=50&descAlignY=62" /></p>
 
 <p align="center">
-  <img alt="Version 0.1.1" src="https://img.shields.io/badge/version-0.1.1-blue" />
+  <img alt="Version 0.1.3" src="https://img.shields.io/badge/version-0.1.3-blue" />
   <img alt="C++23" src="https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white" />
   <img alt="CMake 3.28+" src="https://img.shields.io/badge/CMake-3.28%2B-064F8C?logo=cmake&logoColor=white" />
   <img alt="Apache Arrow / Parquet" src="https://img.shields.io/badge/output-Parquet-50ABF1?logo=apache&logoColor=white" />
   <img alt="Plugins: dlopen" src="https://img.shields.io/badge/plugins-dlopen-orange" />
 </p>
 
-# NQBook
+# NQ HPC
 
-NQBook is an order book engine for MBO (market by order) data. It keeps one order book per instrument from a single market-wide event stream, reduces resting orders on trades without simulating a match, and turns the books into feature rows through plugins.
+NQ HPC turns a market data feed into feature rows. Feature plugins compute the values, and samplers write the rows to Parquet.
 
-- **Plugins, not rebuilds.** Data sources (adapters) and feature computations are `.so` files loaded at startup. NQBook never has to be recompiled to add one.
-- **Agent-safe plugin SDK.** Plugins see a small C ABI and a header-only C++ layer, [NQCPPSDK](https://github.com/Zhou-London/nqcppsdk). They never see engine code, and an SDK mismatch is refused at load time.
-- **Streaming features.** Every feature is incremental. Samplers read them on time bars, event counts, or trade counts, and cumulative columns serve every sampling rate from one state.
-- **Parquet out.** Rows stream to one Parquet file per sampler while the run proceeds, with a UTC nanosecond timestamp column and an instrument table.
-- **Feed validation.** `check-feed` replays any adapter through bare books and reports timestamp regressions, unknown orders, and over-filled trades.
+One run reads one feed. The adapter plugin decides which:
 
-## Thirty seconds
+| Feed | Record | Per instrument |
+|---|---|---|
+| MBO | one order event | an order book and the feature plugins |
+| OHLCV | one bar: open, high, low, close, volume | the feature plugins |
+
+Every feature plugin must read the feed the adapter sends. A mismatch stops the run with exit code 9.
+
+## Build and run
+
+Requires CMake 3.28, a C++23 compiler, and Apache Arrow with Parquet.
 
 ```bash
-cmake -S . -B build && cmake --build build -j
-build/nqbook run --adapter build/plugins/adapters/synthetic.so \
-                 --adapter-param count=100000 --adapter-param instruments=3 \
-                 --plugin-dir build/plugins/features \
-                 --sampler e=events:1000 \
-                 --out-dir out
+cmake -S . -B build && cmake --build build -j && ctest --test-dir build
+build/nqhpc run --adapter build/plugins/adapters/synthetic.so \
+                --adapter-param count=100000 --adapter-param instruments=3 \
+                --plugin build/plugins/features/example_features.so \
+                --sampler e=events:1000
+build/nqhpc run --adapter build/plugins/adapters/synthetic_ohlcv.so \
+                --adapter-param count=100000 --adapter-param instruments=3 \
+                --plugin build/plugins/features/example_ohlcv_features.so \
+                --sampler 5m=time:5m
 ```
 
-The report prints to stderr. `out/e.parquet` holds the feature rows and `out/instruments.parquet` the instrument table.
+The first command reads an MBO feed, the second an OHLCV feed.
 
-## Documents
+`run` writes into `out/` under the current directory. `--out-dir` picks another directory. `nqhpc help` lists the subcommands: `check`, `run`, and `check-feed`.
 
-| Document | For | Contents |
+## Architecture
+
+```
+adapter thread         main thread                          writer thread
+AdapterEngine          Session::Run                         WriterEngine
+  adapter.Next()  ──►    PipelineTable                        ParquetWriter
+                           per instrument: Pipeline
+                             Orderbook (MBO feed)
+                             FeatureEngine
+                               plugins ─► Samplers  ──────►
+```
+
+- Two single-producer single-consumer queues connect the three threads. A full queue makes the producer wait.
+- `AdapterEngine` runs the adapter plugin on its own thread and caches instrument metadata.
+- `AdapterEngine`, `PipelineTable`, `Pipeline`, and `Session` are templates over the record type: `nq_mbo` or `nq_ohlcv`.
+- `PipelineTable` maps each instrument id to a `Pipeline`. An MBO `Pipeline` holds an `Orderbook` and a `FeatureEngine`. An OHLCV `Pipeline` holds a `FeatureEngine` only.
+- `Orderbook` keeps pooled orders in price levels and reduces resting orders on trades.
+- `FeatureEngine` calls the feature plugins on each record and passes their values to the samplers.
+- `WriterEngine` writes one Parquet file per sampler, plus `instruments.parquet`. Each sampler row holds the instrument id and its symbol.
+
+Sampling has three layers. Each layer uses only the layer below it.
+
+| Layer | Class | Job |
 |---|---|---|
-| [docs/manual.md](docs/manual.md) | users and harnesses | getting started, every command and option, the semantics of bars, output, and exit codes |
-| [docs/development.md](docs/development.md) | people changing NQBook | source layout, threads and queues, build and test, dependency pins, release loop, performance baseline |
-| [NQCPPSDK manual](https://github.com/Zhou-London/nqcppsdk/blob/main/docs/manual.md) | plugin authors | how to write, build, and test a feature or adapter plugin, and the API reference |
+| clock | `Clock/TimerWheel` | Wakes a key when the event clock reaches its due time. Holds the timers in a two-level wheel: 4096 slots of one millisecond, then 4096 slots of 4.096 seconds. Knows nothing about instruments or samplers |
+| trigger | `Feature/Trigger`: `BarTrigger`, `CountTrigger` | Decides when a row is due and calls `emit(ts)`. Pure logic: no plugins, no output |
+| row | `Feature/Sampler` | Reads feature values, turns cumulative columns into deltas, and pushes the row to the sink |
 
-## Requirements
+`PipelineTable` joins the layers. On each record it fires the due timers, applies the record to its own instrument, and schedules that instrument's next due time. An idle instrument costs nothing per record.
 
-CMake 3.28, a C++23 compiler, Apache Arrow with Parquet (`brew install apache-arrow` on macOS, `libarrow-dev libparquet-dev` on Debian and Ubuntu), and GitHub access on the first configure.
+The `ts` of an OHLCV record is the start of its period. A `time` sampler with the same period writes one row per record, stamped at the end of the period. The `trades` trigger needs an MBO feed.
+
+| Path | Contents |
+|---|---|
+| `src/`, `include/` | the engine |
+| `plugins/` | one example feature plugin and one synthetic adapter per feed, the `nqlake_ohlcv` adapter, the `ta_ohlcv` feature plugin |
+| `tests/` | one test executable per layer |
+| `shared/` | nlib and [NQCPPSDK](https://github.com/Zhou-London/nqcppsdk), fetched by CMake at the `GIT_TAG` pins |

@@ -1,22 +1,35 @@
 #pragma once
 
 #include <cstddef>
-#include <limits>
+#include <utility>
 
-#include <nlib/common.h>
+#include <nq/abi.h>
 
 #include <Defaults.h>
-#include <Feature/FeatureEngine.h>
 #include <Feature/FeatureCatalog.h>
+#include <Feature/FeatureEngine.h>
+#include <Feature/OrderbookView.h>
 #include <Orderbook.h>
 
 namespace nq {
 
-class Pipeline {
+template <class Record>
+struct PipelineOptions {};
+
+template <>
+struct PipelineOptions<nq_mbo> {
+    std::size_t expected_orders = defaults::kExpectedOrders;
+};
+
+template <class Record>
+class Pipeline;
+
+template <>
+class Pipeline<nq_mbo> {
 public:
-    Pipeline(const FeatureCatalog& catalog, Instrument spec, std::size_t expected_orders = defaults::kExpectedOrders,
+    Pipeline(const FeatureCatalog& catalog, Instrument spec, PipelineOptions<nq_mbo> options = {},
              RowSink* sink = nullptr)
-        : book_(expected_orders), engine_(book_, catalog, std::move(spec), sink) {}
+        : book_(options.expected_orders), view_(book_), engine_(catalog, std::move(spec), sink, &view_.View()) {}
 
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;
@@ -26,28 +39,33 @@ public:
     FeatureEngine& Engine() noexcept { return engine_; }
     const FeatureEngine& Engine() const noexcept { return engine_; }
 
-    nlib::qty_t Apply(const nq_mbo& m) {
-        const nlib::qty_t filled = book_.Apply(m);
-        engine_.OnEvent(m, filled);
-        return filled;
-    }
+    void Apply(const nq_mbo& m) { engine_.OnEvent(m, book_.Apply(m)); }
 
     void Close() { engine_.Close(); }
 
-    std::size_t Consume(Orderbook::Queue& q, std::size_t max = std::numeric_limits<std::size_t>::max()) {
-        std::size_t n = 0;
-        while (n < max) {
-            auto m = q.try_pop();
-            if (!m) break;
-            engine_.Advance(m->ts);
-            Apply(*m);
-            ++n;
-        }
-        return n;
-    }
-
 private:
     Orderbook book_;
+    OrderbookView view_;
+    FeatureEngine engine_;
+};
+
+template <>
+class Pipeline<nq_ohlcv> {
+public:
+    Pipeline(const FeatureCatalog& catalog, Instrument spec, PipelineOptions<nq_ohlcv> = {}, RowSink* sink = nullptr)
+        : engine_(catalog, std::move(spec), sink) {}
+
+    Pipeline(const Pipeline&) = delete;
+    Pipeline& operator=(const Pipeline&) = delete;
+
+    FeatureEngine& Engine() noexcept { return engine_; }
+    const FeatureEngine& Engine() const noexcept { return engine_; }
+
+    void Apply(const nq_ohlcv& ohlcv) { engine_.OnOhlcv(ohlcv); }
+
+    void Close() { engine_.Close(); }
+
+private:
     FeatureEngine engine_;
 };
 

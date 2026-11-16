@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <limits>
 #include <map>
 #include <memory>
 #include <vector>
@@ -14,13 +13,11 @@
 #include <Defaults.h>
 #include <nlib/map.h>
 #include <nlib/memory_pool.h>
-#include <nlib/single_queue.h>
 
 namespace nq {
 
 class Orderbook {
 public:
-    using Queue = nlib::single_queue<nq_mbo>;
     using BidLevels = std::map<nlib::price_t, nlib::level, std::greater<nlib::price_t>>;
     using AskLevels = std::map<nlib::price_t, nlib::level, std::less<nlib::price_t>>;
 
@@ -47,7 +44,6 @@ public:
 
     // Feed Handlers
     nlib::qty_t Apply(const nq_mbo& m);
-    std::size_t Consume(Queue& q, std::size_t max = std::numeric_limits<std::size_t>::max());
 
     void OnOrder(const nq_mbo& m);
     void OnCancel(const nq_mbo& m);
