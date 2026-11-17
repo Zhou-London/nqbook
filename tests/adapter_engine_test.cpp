@@ -17,7 +17,7 @@ static int TestAdapterEngine() {
 
     engine.Start();
     while (engine.Stalls() == 0) std::this_thread::yield();
-    CHECK(engine.Pushed() == 4 && engine.Queue().size() == 4);
+    CHECK(engine.Queue().size() == 4);
     CHECK(engine.FindInstrument(1)->symbol == "SYN1" && engine.FindInstrument(1)->tick_size == 10);
     CHECK(!engine.FindInstrument(4));
 
@@ -35,7 +35,7 @@ static int TestAdapterEngine() {
         if (engine.Ended() && engine.Queue().empty()) break;
         std::this_thread::yield();
     }
-    CHECK(ok && got == 100 && engine.Pushed() == 100 && engine.Stalls() >= 1 && engine.Status() == 0);
+    CHECK(ok && got == 100 && engine.Stalls() >= 1 && engine.Status() == 0);
     CHECK(engine.FindInstrument(1) && engine.FindInstrument(2) && engine.FindInstrument(3));
     engine.Stop();
 
@@ -51,9 +51,9 @@ static int TestAdapterEngine() {
     nq::AdapterEngine<nq_mbo> blocked(plugin.Create(*endless.Build()), 1);
     blocked.Start();
     while (blocked.Stalls() == 0) std::this_thread::yield();
-    CHECK(blocked.Pushed() == 1 && !blocked.Ended());
+    CHECK(blocked.Queue().size() == 1 && !blocked.Ended());
     blocked.Stop();
-    CHECK(blocked.Pushed() == 1 && !blocked.Ended());
+    CHECK(blocked.Queue().size() == 1 && !blocked.Ended());
     return 0;
 }
 

@@ -2,83 +2,66 @@
 
 #include <algorithm>
 
-#include <nq/params.hpp>
-
 namespace nq {
 
 FeatureEngine::FeatureEngine(const FeatureCatalog& catalog, Instrument spec, RowSink* sink, const nq_book_view* book)
-    : book_(book), catalog_(&catalog), spec_(std::move(spec)) {
-    instances_.reserve(catalog.PluginCount());
-    for (std::size_t i = 0; i < catalog.PluginCount(); ++i) {
-        ParamsBuilder pb;
-        pb.Symbol(spec_.symbol)
-            .TickSize(spec_.tick_size)
-            .LotSize(spec_.lot_size)
-            .PriceScale(NQ_PRICE_SCALE)
-            .QtyScale(NQ_QTY_SCALE);
-        for (const auto& [k, v] : catalog.PluginParams(i)) pb.Set(k, v);
-        offsets_.push_back(values_.size());
-        values_.resize(values_.size() + catalog.Plugin(i).Schema().ncol, 0.0);
-        instances_.push_back(catalog.Plugin(i).Create(*pb.Build()));
+    : book_(book), spec_(std::move(spec)) {
+    instances_.reserve(catalog.Plugins().size());
+    for (const LoadedPlugin& p : catalog.Plugins()) {
+        ParamsBuilder pb = ScaledParams(p.params);
+        pb.Symbol(spec_.symbol).TickSize(spec_.tick_size).LotSize(spec_.lot_size);
+        values_.resize(values_.size() + p.library.Schema().ncol, 0.0);
+        instances_.push_back(p.library.Create(*pb.Build()));
     }
     if (sink) sink->Register(spec_);
+    samplers_.reserve(catalog.Samplers().size());
     for (std::size_t i = 0; i < catalog.Samplers().size(); ++i) {
         const auto& t = catalog.Samplers()[i];
-        samplers_.push_back(std::make_unique<Sampler>(t.spec, t.names, t.columns, sink,
-                                                      static_cast<std::uint32_t>(i), spec_.id));
+        samplers_.emplace_back(t.spec.trigger, t.names, t.columns, sink, catalog.SamplerTable(i), spec_.id);
     }
-}
-
-Sampler* FeatureEngine::FindSampler(std::string_view name) noexcept {
-    for (auto& s : samplers_) {
-        if (s->Spec().name == name) return s.get();
-    }
-    return nullptr;
 }
 
 std::span<const double> FeatureEngine::ReadAll() {
-    if (cross_epoch_ && *cross_epoch_ != seen_epoch_) {
-        seen_epoch_ = *cross_epoch_;
-        values_fresh_ = false;
-    }
-    if (!values_fresh_) {
-        std::span<double> all(values_);
-        for (std::size_t i = 0; i < instances_.size(); ++i) {
-            instances_[i].Read(all.subspan(offsets_[i], instances_[i].Ncol()), book_);
+    if (values_epoch_ != *cross_epoch_) {
+        std::span<double> rest(values_);
+        for (auto& inst : instances_) {
+            const std::size_t ncol = inst.Ncol();
+            inst.Read(rest.first(ncol), book_);
+            rest = rest.subspan(ncol);
         }
-        values_fresh_ = true;
+        values_epoch_ = *cross_epoch_;
     }
     return values_;
 }
 
 void FeatureEngine::Advance(std::int64_t ts) {
-    for (auto& s : samplers_) s->Advance(ts, [this] { return ReadAll(); });
+    for (auto& s : samplers_) s.Advance(ts, [this] { return ReadAll(); });
 }
 
 std::int64_t FeatureEngine::Due() const noexcept {
     std::int64_t due = TimerWheel::kNever;
-    for (const auto& s : samplers_) due = std::min(due, s->Due());
+    for (const auto& s : samplers_) due = std::min(due, s.Due());
     return due;
 }
 
 void FeatureEngine::Close() {
-    for (auto& s : samplers_) s->Close([this] { return ReadAll(); });
+    for (auto& s : samplers_) s.Close([this] { return ReadAll(); });
 }
 
 void FeatureEngine::ResetPlugins(std::int64_t ts) {
     const std::span<const double> before = ReadAll();
-    for (auto& s : samplers_) s->CarryDelta(before);
+    for (auto& s : samplers_) s.CarryDelta(before);
 
     const nq_control reset{NQ_CONTROL_RESET, ts};
     for (auto& inst : instances_) inst.OnControl(reset);
-    values_fresh_ = false;
+    values_epoch_ = kStale;
 
     const std::span<const double> after = ReadAll();
-    for (auto& s : samplers_) s->ResetBaseline(after);
+    for (auto& s : samplers_) s.ResetBaseline(after);
 }
 
 void FeatureEngine::OnEvent(const nq_mbo& m, nlib::qty_t filled) {
-    values_fresh_ = false;
+    values_epoch_ = kStale;
     if (m.action == NQ_CLEAR) {
         ResetPlugins(m.ts);
     } else {
@@ -90,13 +73,13 @@ void FeatureEngine::OnEvent(const nq_mbo& m, nlib::qty_t filled) {
 }
 
 void FeatureEngine::OnOhlcv(const nq_ohlcv& ohlcv) {
-    values_fresh_ = false;
+    values_epoch_ = kStale;
     for (auto& inst : instances_) inst.OnOhlcv(ohlcv);
     NotifySamplers(ohlcv.ts, false);
 }
 
 void FeatureEngine::NotifySamplers(std::int64_t ts, bool is_trade) {
-    for (auto& s : samplers_) s->OnEvent(ts, is_trade, [this] { return ReadAll(); });
+    for (auto& s : samplers_) s.OnEvent(ts, is_trade, [this] { return ReadAll(); });
 }
 
 }  // namespace nq

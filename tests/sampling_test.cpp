@@ -55,15 +55,15 @@ static int TestTimerWheel() {
     for (std::uint32_t key : {130u, 5u, 64u, 63u, 200u}) wide.WakeBy(key, 50);
     wide.WakeBy(7, 40);
     wide.WakeBy(200, 45);
-    wide.AdvanceTo(60, [&](std::uint32_t key) { woken.push_back(key); });
+    wide.AdvanceTo(60, wake);
     CHECK((woken == Keys{7, 200, 5, 63, 64, 130}));
 
     woken.clear();
     wide.WakeBy(64, 70);
     wide.WakeBy(3, 70);
-    wide.AdvanceTo(69, [&](std::uint32_t key) { woken.push_back(key); });
+    wide.AdvanceTo(69, wake);
     CHECK(woken.empty());
-    wide.AdvanceTo(70, [&](std::uint32_t key) { woken.push_back(key); });
+    wide.AdvanceTo(70, wake);
     CHECK((woken == Keys{3, 64}));
     return 0;
 }
@@ -184,7 +184,7 @@ static int TestBarTrigger() {
     Times out;
     auto emit = [&](std::int64_t at) { out.push_back(at); };
 
-    nq::BarTrigger bars(10, false);
+    nq::BarTrigger bars({10, false});
     CHECK(bars.Due() == nq::TimerWheel::kNever);
     bars.Advance(3, emit);
     CHECK(bars.Due() == nq::TimerWheel::kNever);
@@ -200,7 +200,7 @@ static int TestBarTrigger() {
     CHECK((out == Times{10, 30}));
 
     out.clear();
-    nq::BarTrigger filled(10, true);
+    nq::BarTrigger filled({10, true});
     filled.Advance(3, emit);
     CHECK(filled.Due() == 10);
     filled.Advance(34, emit);

@@ -10,7 +10,6 @@
 using nq::Orderbook;
 using namespace nqtest;
 
-
 int main() {
     Orderbook ob(4);
 

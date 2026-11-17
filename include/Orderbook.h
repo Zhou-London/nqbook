@@ -37,26 +37,18 @@ public:
     };
 
     explicit Orderbook(std::size_t expected_orders = defaults::kExpectedOrders);
-    ~Orderbook() = default;
 
     Orderbook(const Orderbook&) = delete;
     Orderbook& operator=(const Orderbook&) = delete;
 
-    // Feed Handlers
     nlib::qty_t Apply(const nq_mbo& m);
-
-    void OnOrder(const nq_mbo& m);
-    void OnCancel(const nq_mbo& m);
-    void OnModify(const nq_mbo& m);
-    nlib::qty_t OnTrade(const nq_mbo& m);
-    void OnClear(const nq_mbo& m);
 
     // Queries
     const nlib::level* BestBid() const noexcept;
     const nlib::level* BestAsk() const noexcept;
     const BidLevels& Bids() const noexcept { return bids_; }
     const AskLevels& Asks() const noexcept { return asks_; }
-    const nlib::level* FindLevel(std::uint8_t s, nlib::price_t p) const noexcept;
+    const nlib::level* FindLevel(std::uint8_t side, nlib::price_t p) const noexcept;
     const nlib::order* FindOrder(nlib::order_id id) const noexcept;
 
     std::size_t OrderCount() const noexcept { return orders_.size(); }
@@ -81,16 +73,32 @@ private:
         nlib::order* free_ = nullptr;
     };
 
-    nlib::order* MutableOrder(nlib::order_id id) noexcept;
-    nlib::level* FindOrCreateLevel(std::uint8_t s, nlib::price_t p);
-    nlib::level* MutableLevel(std::uint8_t s, nlib::price_t p) noexcept;
-    void RemoveLevel(nlib::level* lv, std::uint8_t s);
+    void OnOrder(const nq_mbo& m);
+    void OnCancel(const nq_mbo& m);
+    void OnModify(const nq_mbo& m);
+    nlib::qty_t OnTrade(const nq_mbo& m);
+    void OnClear();
+
+    template <class Self, class Fn>
+    static decltype(auto) OnSide(Self& self, std::uint8_t side, Fn&& fn) {
+        return side == NQ_BID ? fn(self.bids_) : fn(self.asks_);
+    }
+    template <class Self>
+    static auto LevelAt(Self& self, std::uint8_t side, nlib::price_t p) noexcept {
+        return OnSide(self, side, [p](auto& levels) {
+            auto it = levels.find(p);
+            return it == levels.end() ? nullptr : &it->second;
+        });
+    }
+    nlib::order* OrderAt(nlib::order_id id) const noexcept;
+    nlib::level* FindOrCreateLevel(std::uint8_t side, nlib::price_t p);
+    void RemoveLevel(std::uint8_t side, nlib::level* lv);
 
     static void LinkOrder(nlib::order* o, nlib::level* lv) noexcept;
-    void UnlinkOrder(nlib::order* o);
+    static void UnlinkOrder(nlib::order* o) noexcept;
     void RemoveOrder(nlib::order* o);
     nlib::qty_t Fill(nlib::order* o, nlib::qty_t qty);
-    nlib::qty_t FillLevel(std::uint8_t s, nlib::price_t p, nlib::qty_t qty);
+    nlib::qty_t FillLevel(std::uint8_t side, nlib::price_t p, nlib::qty_t qty);
 
     BidLevels bids_;
     AskLevels asks_;

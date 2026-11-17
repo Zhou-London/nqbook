@@ -1,6 +1,7 @@
 #include <Writer/ParquetWriter.h>
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -38,10 +39,8 @@ std::shared_ptr<parquet::ArrowWriterProperties> ArrowProperties() {
 }
 
 std::int32_t DayOf(std::int64_t ns) {
-    constexpr std::int64_t kDay = 86'400'000'000'000;
-    std::int64_t day = ns / kDay;
-    if (ns % kDay < 0) --day;
-    return static_cast<std::int32_t>(day);
+    using namespace std::chrono;
+    return static_cast<std::int32_t>(floor<days>(nanoseconds{ns}).count());
 }
 
 std::unique_ptr<parquet::arrow::FileWriter> OpenWriter(const std::filesystem::path& path,
@@ -63,7 +62,7 @@ struct ParquetWriter::Table {
     arrow::StringBuilder symbol;
     arrow::Int64Builder ts;
     arrow::Date32Builder date;
-    std::vector<std::unique_ptr<arrow::DoubleBuilder>> columns;
+    std::vector<arrow::TypedBufferBuilder<double>> columns;
     std::int64_t pending = 0;
     std::uint64_t rows = 0;
 
@@ -75,44 +74,37 @@ struct ParquetWriter::Table {
           instrument(arrow::default_memory_pool()),
           ts(arrow::default_memory_pool()),
           date(arrow::default_memory_pool()) {
-        columns.reserve(ncol);
-        for (std::size_t i = 0; i < ncol; ++i) {
-            columns.push_back(std::make_unique<arrow::DoubleBuilder>(arrow::default_memory_pool()));
-        }
+        columns.resize(ncol);
     }
 };
 
-ParquetWriter::ParquetWriter(const FeatureCatalog& catalog, std::filesystem::path dir, ParquetOptions options)
-    : dir_(std::move(dir)), options_(options), instruments_path_(dir_ / "instruments.parquet") {
+ParquetWriter::ParquetWriter(const FeatureCatalog& catalog, const std::filesystem::path& dir, ParquetOptions options)
+    : options_(options), instruments_path_(dir / "instruments.parquet") {
     if (options_.row_group_rows <= 0) throw std::invalid_argument("row_group_rows must be positive");
-    std::filesystem::create_directories(dir_);
-    const auto open = [this](const std::string& table, const std::vector<std::string>& names) {
+    std::filesystem::create_directories(dir);
+    for (std::size_t t = 0; t < catalog.TableCount(); ++t) {
+        const TableSchema table = catalog.Table(t);
         arrow::FieldVector fields;
         fields.push_back(arrow::field("instrument", arrow::uint32(), false));
         fields.push_back(arrow::field("symbol", arrow::utf8(), false));
         fields.push_back(arrow::field("ts", arrow::int64(), false));
         fields.push_back(arrow::field("date", arrow::date32(), false));
-        for (const auto& name : names) fields.push_back(arrow::field(name, arrow::float64(), false));
-        tables_.push_back(std::make_unique<Table>(dir_ / (table + ".parquet"), arrow::schema(std::move(fields)),
-                                                  names.size(), options_.row_group_rows));
-    };
-    for (const SamplerTemplate& t : catalog.Samplers()) open(t.spec.name, t.names);
-    for (const CrossTemplate& t : catalog.Crosses()) open(t.spec.name, t.names);
+        for (const auto& name : table.columns) fields.push_back(arrow::field(name, arrow::float64(), false));
+        tables_.push_back(std::make_unique<Table>(dir / (table.name + ".parquet"), arrow::schema(std::move(fields)),
+                                                  table.columns.size(), options_.row_group_rows));
+    }
 }
 
 ParquetWriter::~ParquetWriter() {
-    if (closed_) return;
     try {
         Close();
     } catch (...) {
     }
 }
 
-const std::filesystem::path& ParquetWriter::Path(std::size_t sampler) const noexcept {
-    return tables_[sampler]->path;
-}
+const std::filesystem::path& ParquetWriter::Path(std::size_t table) const noexcept { return tables_[table]->path; }
 
-std::uint64_t ParquetWriter::Rows(std::size_t sampler) const noexcept { return tables_[sampler]->rows; }
+std::uint64_t ParquetWriter::Rows(std::size_t table) const noexcept { return tables_[table]->rows; }
 
 std::vector<std::filesystem::path> ParquetWriter::Files() const {
     std::vector<std::filesystem::path> out;
@@ -126,27 +118,6 @@ void ParquetWriter::Register(const Instrument& instrument) {
     if (!instruments_.emplace(instrument.id, instrument).second) {
         throw std::invalid_argument("instrument " + std::to_string(instrument.id) + " is registered twice");
     }
-}
-
-void ParquetWriter::Write(const FeatureRow& row) {
-    if (closed_) throw std::logic_error("ParquetWriter::Write after Close");
-    if (row.sampler >= tables_.size()) throw std::out_of_range("FeatureRow.sampler out of range");
-    Table& t = *tables_[row.sampler];
-    if (row.values.size() != t.columns.size()) {
-        throw std::invalid_argument(t.path.string() + ": row has " + std::to_string(row.values.size()) +
-                                    " values, schema has " + std::to_string(t.columns.size()));
-    }
-    const auto known = instruments_.find(row.instrument);
-    if (known == instruments_.end()) {
-        throw std::invalid_argument(t.path.string() + ": instrument " + std::to_string(row.instrument) +
-                                    " is not registered");
-    }
-    Check(t.instrument.Append(row.instrument), t.path);
-    Check(t.symbol.Append(known->second.symbol), t.path);
-    Check(t.ts.Append(row.ts), t.path);
-    Check(t.date.Append(DayOf(row.ts)), t.path);
-    for (std::size_t i = 0; i < t.columns.size(); ++i) Check(t.columns[i]->Append(row.values[i]), t.path);
-    if (++t.pending >= options_.row_group_rows) Flush(t);
 }
 
 void ParquetWriter::Write(const FeatureBlock& block) {
@@ -172,7 +143,7 @@ void ParquetWriter::Write(const FeatureBlock& block) {
     Check(t.date.Reserve(n), t.path);
     for (std::int64_t i = 0; i < n; ++i) t.date.UnsafeAppend(day);
     for (std::size_t c = 0; c < t.columns.size(); ++c) {
-        Check(t.columns[c]->AppendValues(block.values.data() + c * nrow, n), t.path);
+        Check(t.columns[c].Append(block.values.data() + c * nrow, n), t.path);
     }
     t.pending += n;
     if (t.pending >= options_.row_group_rows) Flush(t);
@@ -186,7 +157,7 @@ void ParquetWriter::Flush(Table& t) {
     arrays.push_back(Unwrap(t.symbol.Finish(), t.path));
     arrays.push_back(Unwrap(t.ts.Finish(), t.path));
     arrays.push_back(Unwrap(t.date.Finish(), t.path));
-    for (auto& c : t.columns) arrays.push_back(Unwrap(c->Finish(), t.path));
+    for (auto& c : t.columns) arrays.push_back(std::make_shared<arrow::DoubleArray>(t.pending, Unwrap(c.Finish(), t.path)));
     const auto batch = arrow::RecordBatch::Make(t.schema, t.pending, std::move(arrays));
     Check(t.writer->WriteRecordBatch(*batch), t.path);
     t.rows += static_cast<std::uint64_t>(t.pending);

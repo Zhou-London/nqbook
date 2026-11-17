@@ -1,11 +1,14 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 
 #include <nq/abi.h>
+#include <nq/instrument.hpp>
 
 #include <Feature/RowBuffer.h>
 
@@ -16,10 +19,28 @@ namespace nqtest {
 inline constexpr std::int64_t kSec = 1'000'000'000;
 inline constexpr std::int64_t kMin = 60 * kSec;
 
-inline std::int64_t Sec(double t) { return static_cast<std::int64_t>(std::llround(t * static_cast<double>(kSec))); }
-inline std::int64_t P(double x) { return static_cast<std::int64_t>(std::llround(x * static_cast<double>(NQ_PRICE_SCALE))); }
-inline std::int64_t Q(double x) { return static_cast<std::int64_t>(std::llround(x * static_cast<double>(NQ_QTY_SCALE))); }
+inline std::int64_t Scaled(double x, std::int64_t scale) { return std::llround(x * static_cast<double>(scale)); }
+inline std::int64_t Sec(double t) { return Scaled(t, kSec); }
+inline std::int64_t P(double x) { return Scaled(x, NQ_PRICE_SCALE); }
+inline std::int64_t Q(double x) { return Scaled(x, NQ_QTY_SCALE); }
 inline bool Near(double a, double b, double eps = 1e-9) { return std::fabs(a - b) < eps; }
+inline bool NearOrBothNan(double a, double b) { return (std::isnan(a) && std::isnan(b)) || Near(a, b); }
+
+template <class Exception, class Step>
+bool Throws(Step&& step) {
+    try {
+        step();
+    } catch (const Exception&) {
+        return true;
+    }
+    return false;
+}
+
+inline std::optional<nq::Instrument> ResolveTwoInstruments(std::uint32_t id) {
+    if (id == 1) return nq::Instrument{1, "AAA", 10, 1};
+    if (id == 2) return nq::Instrument{2, "BBB", 5, 100};
+    return std::nullopt;
+}
 
 inline nq_mbo Mbo(std::uint8_t action, std::int64_t ts, std::uint32_t instrument, std::uint64_t id, std::uint8_t side,
                   std::int64_t price, std::int64_t qty) {
@@ -53,14 +74,22 @@ inline nq_ohlcv Ohlcv(std::int64_t ts, std::uint32_t instrument, double open, do
     return nq_ohlcv{ts, P(open), P(high), P(low), P(close), volume, instrument};
 }
 
-inline bool RowIs(const nq::RowBuffer& rows, std::size_t i, std::int64_t ts, double spread, double mid, double buy,
-                  double sell, double trades) {
-    if (i >= rows.RowCount()) return false;
-    if (rows.Ts(i) != ts) return false;
+template <std::size_t N>
+bool RowIs(const nq::RowBuffer& rows, std::size_t i, std::int64_t ts, const std::array<double, N>& want) {
+    if (i >= rows.RowCount() || rows.Ts(i) != ts) return false;
     const auto r = rows.Row(i);
-    const bool book_ok = std::isnan(spread) ? (std::isnan(r[0]) && std::isnan(r[1]))
-                                            : (Near(r[0], spread) && Near(r[1], mid));
-    return book_ok && Near(r[2], buy) && Near(r[3], sell) && Near(r[4], trades);
+    for (std::size_t c = 0; c < N; ++c) {
+        if (!NearOrBothNan(r[c], want[c])) return false;
+    }
+    return true;
+}
+
+struct BookRow {
+    double spread, mid, buy_vol = 0, sell_vol = 0, trades = 0;
+};
+
+inline bool RowIs(const nq::RowBuffer& rows, std::size_t i, std::int64_t ts, const BookRow& want) {
+    return RowIs(rows, i, ts, std::array{want.spread, want.mid, want.buy_vol, want.sell_vol, want.trades});
 }
 
 }  // namespace nqtest

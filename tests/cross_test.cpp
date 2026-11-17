@@ -2,14 +2,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-#include <arrow/api.h>
-#include <arrow/io/file.h>
-#include <parquet/arrow/reader.h>
 
 #include <Feature/CrossPanel.h>
 #include <PipelineTable.h>
@@ -17,16 +12,11 @@
 #include <Writer/ParquetWriter.h>
 #include <Writer/WriterEngine.h>
 
+#include "parquet_support.hpp"
 #include "support.hpp"
 
 namespace fs = std::filesystem;
 using namespace nqtest;
-
-static std::optional<nq::Instrument> Resolve(std::uint32_t id) {
-    if (id == 1) return nq::Instrument{1, "AAA", 10, 1};
-    if (id == 2) return nq::Instrument{2, "BBB", 5, 100};
-    return std::nullopt;
-}
 
 struct Call {
     std::int64_t ts;
@@ -62,8 +52,7 @@ private:
 static nq::CrossSpec DemeanSpec(std::string name, bool fill_gaps, std::vector<Call>* calls = nullptr) {
     nq::CrossSpec spec;
     spec.name = std::move(name);
-    spec.every = kSec;
-    spec.fill_gaps = fill_gaps;
+    spec.bars = {kSec, fill_gaps};
     spec.inputs = {"test.mid"};
     spec.outputs = {"demean", "n"};
     spec.make = [calls] { return std::make_unique<Demean>(calls); };
@@ -83,6 +72,18 @@ static void Feed(Table& table) {
     table.Close();
 }
 
+constexpr std::uint32_t kLadderInstruments = 3000;
+static constexpr double LadderMid(std::uint32_t instrument) { return 11.0 + instrument; }
+constexpr double kLadderMeanMid = (LadderMid(0) + LadderMid(kLadderInstruments - 1)) / 2.0;
+
+template <class Table>
+static void ApplyLadder(Table& table) {
+    for (std::uint32_t i = 0; i < kLadderInstruments; ++i) {
+        table.Apply(Add(i + 1, i, 1, NQ_BID, P(LadderMid(i) - 1.0), Q(1)));
+        table.Apply(Add(i + 1, i, 2, NQ_ASK, P(LadderMid(i) + 1.0), Q(1)));
+    }
+}
+
 static double At(const nq::FeatureBlock& b, std::size_t column, std::size_t row) {
     return b.values[column * b.instruments.size() + row];
 }
@@ -90,6 +91,7 @@ static double At(const nq::FeatureBlock& b, std::size_t column, std::size_t row)
 static int TestPanel() {
     nq::CrossPanel p(2, 1, 64);
     CHECK(p.Stride() == 64 && p.RowCount() == 0 && p.Changed().empty());
+    p.Ensure(6);
     p.Touch(0);
     p.Touch(0);
     p.Touch(5);
@@ -101,6 +103,7 @@ static int TestPanel() {
     p.MarkValid(0);
     CHECK(p.Valid(0) && !p.Valid(5) && p.ValidRows().size() == 1);
 
+    p.Ensure(201);
     p.Touch(200);
     CHECK(p.Stride() == 256 && p.RowCount() == 201 && p.Changed().size() == 3);
     CHECK(p.In(0)[0] == 1.5 && p.In(1)[5] == 2.5 && std::isnan(p.In(0)[200]) && p.Valid(0));
@@ -125,12 +128,7 @@ static int TestCatalog() {
     catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
 
     const auto rejects = [&](nq::CrossSpec spec) {
-        try {
-            catalog.AddCross(std::move(spec));
-        } catch (const std::invalid_argument&) {
-            return true;
-        }
-        return false;
+        return Throws<std::invalid_argument>([&] { catalog.AddCross(std::move(spec)); });
     };
     nq::CrossSpec cumulative = DemeanSpec("a", false);
     cumulative.inputs = {"test.trades"};
@@ -141,7 +139,7 @@ static int TestCatalog() {
     nq::CrossSpec no_inputs = DemeanSpec("a", false);
     no_inputs.inputs.clear();
     nq::CrossSpec no_period = DemeanSpec("a", false);
-    no_period.every = 0;
+    no_period.bars.every = 0;
     CHECK(rejects(cumulative) && rejects(unknown) && rejects(no_operator) && rejects(no_inputs) && rejects(no_period));
     CHECK(rejects(DemeanSpec("1s", false)));
 
@@ -151,12 +149,8 @@ static int TestCatalog() {
     const nq::CrossTemplate& t = catalog.Crosses()[0];
     CHECK(t.names.size() == 3 && t.names[0] == "test.mid" && t.names[1] == "x.demean" && t.names[2] == "x.n");
 
-    bool threw = false;
-    try { catalog.AddSampler(nq::SamplerSpec::Time("x", kSec)); } catch (const std::invalid_argument&) { threw = true; }
-    CHECK(threw);
-    threw = false;
-    try { catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "late"); } catch (const std::logic_error&) { threw = true; }
-    CHECK(threw);
+    CHECK(Throws<std::invalid_argument>([&] { catalog.AddSampler(nq::SamplerSpec::Time("x", kSec)); }));
+    CHECK(Throws<std::logic_error>([&] { catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "late"); }));
     return 0;
 }
 
@@ -168,7 +162,7 @@ static int TestStage() {
     catalog.AddCross(DemeanSpec("x", false, &calls));
     catalog.AddCross(DemeanSpec("xf", true, &fill_calls));
 
-    nq::PipelineTable<nq_mbo> table(catalog, &Resolve, {.expected_orders = 16}, 4);
+    nq::PipelineTable<nq_mbo> table(catalog, &ResolveTwoInstruments, {.expected_orders = 16}, 4);
     Feed(table);
 
     const nq::CrossStage& x = table.Crosses()[0];
@@ -213,21 +207,17 @@ static int TestGrowth() {
     catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "test");
     catalog.AddCross(DemeanSpec("x", true));
 
-    const std::uint32_t n = 3000;
     nq::PipelineTable<nq_mbo> table(catalog, nullptr, {.expected_orders = 4}, 4);
-    for (std::uint32_t i = 0; i < n; ++i) {
-        table.Apply(Add(i + 1, i, 1, NQ_BID, P(10.0 + i), Q(1)));
-        table.Apply(Add(i + 1, i, 2, NQ_ASK, P(12.0 + i), Q(1)));
-    }
+    ApplyLadder(table);
     table.Close();
 
+    const std::uint32_t last = kLadderInstruments - 1;
     const nq::CrossStage& x = table.Crosses()[0];
-    CHECK(x.Panel().RowCount() == n && x.Panel().Stride() >= n && x.Blocks().size() == 1);
+    CHECK(x.Panel().RowCount() == kLadderInstruments && x.Panel().Stride() >= kLadderInstruments && x.Blocks().size() == 1);
     const nq::FeatureBlock& b = x.Blocks()[0];
-    CHECK(b.ts == kSec && b.instruments.size() == n && b.instruments[0] == 0 && b.instruments[n - 1] == n - 1);
-    const double mean = 11.0 + (n - 1) / 2.0;
-    CHECK(Near(At(b, 0, 0), 11.0) && Near(At(b, 0, n - 1), 11.0 + (n - 1)));
-    CHECK(Near(At(b, 1, 0), 11.0 - mean, 1e-6) && Near(At(b, 2, 17), n));
+    CHECK(b.ts == kSec && b.instruments.size() == kLadderInstruments && b.instruments[0] == 0 && b.instruments[last] == last);
+    CHECK(Near(At(b, 0, 0), LadderMid(0)) && Near(At(b, 0, last), LadderMid(last)));
+    CHECK(Near(At(b, 1, 0), LadderMid(0) - kLadderMeanMid, 1e-6) && Near(At(b, 2, 17), kLadderInstruments));
     return 0;
 }
 
@@ -238,12 +228,7 @@ static int TestPluginCross() {
     catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec).Columns({"c.mid", "c.market_mid", "c.rel_mid"}));
 
     const auto rejects = [&](const char* name, const char* plugin, std::int64_t every) {
-        try {
-            catalog.AddCross(name, plugin, every);
-        } catch (const std::invalid_argument&) {
-            return true;
-        }
-        return false;
+        return Throws<std::invalid_argument>([&] { catalog.AddCross(name, plugin, every); });
     };
     CHECK(rejects("x", "nope", kSec) && rejects("x", "plain", kSec) && rejects("1s", "c", kSec) && rejects("x", "c", 0));
     catalog.AddCross("x", "c", kSec);
@@ -251,7 +236,7 @@ static int TestPluginCross() {
     const nq::CrossTemplate& t = catalog.Crosses()[0];
     CHECK(t.plugin == 0 && t.names.size() == 4 && t.names[0] == "c.mid" && t.names[1] == "x.mean" && t.names[3] == "x.rank");
 
-    nq::PipelineTable<nq_mbo> table(catalog, &Resolve, {.expected_orders = 16}, 4);
+    nq::PipelineTable<nq_mbo> table(catalog, &ResolveTwoInstruments, {.expected_orders = 16}, 4);
     Feed(table);
 
     const auto& b = table.Crosses()[0].Blocks();
@@ -274,34 +259,18 @@ static int TestPluginCross() {
     wide.LoadPlugin(NQ_EXAMPLE_CROSS_FEATURES_PATH, "c");
     wide.AddSampler(nq::SamplerSpec::Time("1s", kSec).Columns({"c.market_mid"}));
     wide.AddCross("x", "c", kSec, true);
-    const std::uint32_t n = 3000;
     nq::PipelineTable<nq_mbo> big(wide, nullptr, {.expected_orders = 4}, 4);
-    for (std::uint32_t i = 0; i < n; ++i) {
-        big.Apply(Add(i + 1, i, 1, NQ_BID, P(10.0 + i), Q(1)));
-        big.Apply(Add(i + 1, i, 2, NQ_ASK, P(12.0 + i), Q(1)));
-    }
+    ApplyLadder(big);
     CHECK(std::isnan(big.Find(0)->Engine().ReadAll()[1]));
     big.Close();
-    const double mean = 11.0 + (n - 1) / 2.0;
-    CHECK(big.Crosses()[0].Panel().Stride() >= n && big.Crosses()[0].Blocks().size() == 1);
-    for (const std::uint32_t id : {0u, 1023u, 1024u, 2999u}) {
+    CHECK(big.Crosses()[0].Panel().Stride() >= kLadderInstruments && big.Crosses()[0].Blocks().size() == 1);
+    for (const std::uint32_t id : {0u, 1023u, 1024u, kLadderInstruments - 1}) {
         const nq::RowBuffer& rows = big.Find(id)->Engine().GetSampler(0).Rows();
-        CHECK(rows.RowCount() == 1 && Near(rows.At(0, 0), mean, 1e-6));
+        CHECK(rows.RowCount() == 1 && Near(rows.At(0, 0), kLadderMeanMid, 1e-6));
     }
     const nq::FeatureBlock& all = big.Crosses()[0].Blocks()[0];
-    CHECK(all.instruments.size() == n && At(all, 3, 0) == 0.0 && At(all, 3, n - 1) == 1.0);
+    CHECK(all.instruments.size() == kLadderInstruments && At(all, 3, 0) == 0.0 && At(all, 3, kLadderInstruments - 1) == 1.0);
     return 0;
-}
-
-static std::shared_ptr<arrow::Table> ReadParquet(const fs::path& path) {
-    auto file = arrow::io::ReadableFile::Open(path.string()).ValueOrDie();
-    auto reader = parquet::arrow::OpenFile(file, arrow::default_memory_pool()).ValueOrDie();
-    return reader->ReadTable().ValueOrDie();
-}
-
-static double DoubleAt(const arrow::Table& t, const std::string& column, std::int64_t row) {
-    const auto scalar = t.GetColumnByName(column)->GetScalar(row).ValueOrDie();
-    return std::static_pointer_cast<arrow::DoubleScalar>(scalar)->value;
 }
 
 static int TestOutput(const fs::path& tmp) {
@@ -314,53 +283,42 @@ static int TestOutput(const fs::path& tmp) {
     std::uint64_t written = 0;
     {
         nq::WriterEngine writer(std::make_unique<nq::ParquetWriter>(catalog, dir, nq::ParquetOptions{4}), 64);
-        writer.Start();
-        nq::PipelineTable<nq_mbo> table(catalog, &Resolve, {.expected_orders = 16}, 4, &writer);
+        nq::PipelineTable<nq_mbo> table(catalog, &ResolveTwoInstruments, {.expected_orders = 16}, 4, &writer);
         Feed(table);
         CHECK(table.Crosses()[0].Blocks().empty());
-        writer.Finish();
-        CHECK(!writer.Failed());
-        CHECK(writer.Writer().SamplerCount() == 2 && writer.Writer().Path(1).filename() == "x.parquet");
+        CHECK(writer.Finish().empty());
+        CHECK(writer.Writer().TableCount() == 2 && writer.Writer().Path(1).filename() == "x.parquet");
         CHECK(writer.Writer().Rows(1) == 6);
         written = writer.Written();
     }
-    const auto bars = ReadParquet(dir / "1s.parquet");
-    const auto x = ReadParquet(dir / "x.parquet");
+    const auto bars = ReadParquet(dir / "1s.parquet").table;
+    const auto x = ReadParquet(dir / "x.parquet").table;
     CHECK(written == static_cast<std::uint64_t>(bars->num_rows() + x->num_rows()));
     CHECK(x->num_rows() == 6 && x->num_columns() == 7);
     CHECK(x->schema()->field(2)->name() == "ts" && x->schema()->field(2)->type()->ToString() == "int64");
     CHECK(x->schema()->field(3)->name() == "date" && x->schema()->field(3)->type()->ToString() == "date32[day]");
     CHECK(x->schema()->field(4)->name() == "test.mid" && x->schema()->field(6)->name() == "x.n");
-    CHECK(Near(DoubleAt(*x, "test.mid", 0), 101.0) && Near(DoubleAt(*x, "x.demean", 1), -25.0));
-    CHECK(std::isnan(DoubleAt(*x, "x.demean", 2)) && Near(DoubleAt(*x, "x.demean", 3), 25.25));
-    CHECK(Near(DoubleAt(*x, "x.n", 5), 3.0));
-    const auto symbol = x->GetColumnByName("symbol")->GetScalar(5).ValueOrDie()->ToString();
-    const auto ts = std::static_pointer_cast<arrow::Int64Scalar>(x->GetColumnByName("ts")->GetScalar(5).ValueOrDie());
-    const auto day = std::static_pointer_cast<arrow::Date32Scalar>(x->GetColumnByName("date")->GetScalar(5).ValueOrDie());
-    CHECK(symbol == "#3" && ts->value == 5 * kSec && day->value == 0);
+    CHECK(Near(ValueAt<arrow::DoubleScalar>(*x, "test.mid", 0), 101.0) && Near(ValueAt<arrow::DoubleScalar>(*x, "x.demean", 1), -25.0));
+    CHECK(std::isnan(ValueAt<arrow::DoubleScalar>(*x, "x.demean", 2)) && Near(ValueAt<arrow::DoubleScalar>(*x, "x.demean", 3), 25.25));
+    CHECK(Near(ValueAt<arrow::DoubleScalar>(*x, "x.n", 5), 3.0));
+    CHECK(StringAt(*x, "symbol", 5) == "#3" && ValueAt<arrow::Int64Scalar>(*x, "ts", 5) == 5 * kSec);
+    CHECK(ValueAt<arrow::Date32Scalar>(*x, "date", 5) == 0);
 
     nq::ParquetWriter direct(catalog, tmp / "direct");
     direct.Register(nq::Instrument{1, "AAA", 10, 1});
-    bool threw = false;
-    try { direct.Write(nq::FeatureBlock{1, kSec, {1}, {1.0, 2.0}}); } catch (const std::invalid_argument&) { threw = true; }
-    CHECK(threw);
-    threw = false;
-    try { direct.Write(nq::FeatureBlock{1, kSec, {9}, {1.0, 2.0, 3.0}}); } catch (const std::invalid_argument&) { threw = true; }
-    CHECK(threw);
-    threw = false;
-    try { direct.Write(nq::FeatureBlock{7, kSec, {1}, {1.0, 2.0, 3.0}}); } catch (const std::out_of_range&) { threw = true; }
-    CHECK(threw);
+    CHECK(Throws<std::invalid_argument>([&] { direct.Write(nq::FeatureBlock{1, kSec, {1}, {1.0, 2.0}}); }));
+    CHECK(Throws<std::invalid_argument>([&] { direct.Write(nq::FeatureBlock{1, kSec, {9}, {1.0, 2.0, 3.0}}); }));
+    CHECK(Throws<std::out_of_range>([&] { direct.Write(nq::FeatureBlock{7, kSec, {1}, {1.0, 2.0, 3.0}}); }));
     direct.Write(nq::FeatureBlock{1, kSec, {1}, {1.0, 2.0, 3.0}});
     direct.Write(nq::FeatureBlock{1, 86400 * kSec, {1}, {1.0, 2.0, 3.0}});
     direct.Close();
     CHECK(direct.Rows(1) == 2);
-    const auto days = ReadParquet(direct.Path(1))->GetColumnByName("date");
-    CHECK(std::static_pointer_cast<arrow::Date32Scalar>(days->GetScalar(0).ValueOrDie())->value == 0);
-    CHECK(std::static_pointer_cast<arrow::Date32Scalar>(days->GetScalar(1).ValueOrDie())->value == 1);
+    const auto days = ReadParquet(direct.Path(1)).table;
+    CHECK(ValueAt<arrow::Date32Scalar>(*days, "date", 0) == 0 && ValueAt<arrow::Date32Scalar>(*days, "date", 1) == 1);
 
-    nq::PipelineTable<nq_mbo> table(catalog, &Resolve, {.expected_orders = 16}, 4);
+    nq::PipelineTable<nq_mbo> table(catalog, &ResolveTwoInstruments, {.expected_orders = 16}, 4);
     Feed(table);
-    const auto files = nq::WriteSamplerCsv(table, tmp / "csv");
+    const auto files = nq::WriteCsv(table, tmp / "csv");
     CHECK(files.size() == 2 && files[1].filename() == "x.csv");
     std::unique_ptr<std::FILE, int (*)(std::FILE*)> csv(std::fopen(files[1].string().c_str(), "r"), &std::fclose);
     CHECK(csv != nullptr);

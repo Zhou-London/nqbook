@@ -1,8 +1,8 @@
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <numbers>
 #include <optional>
-#include <stdexcept>
 #include <vector>
 
 #include <nq/adapter_host.hpp>
@@ -16,21 +16,22 @@
 
 using namespace nqtest;
 
-static std::optional<nq::Instrument> Resolve(std::uint32_t id) {
-    if (id == 1) return nq::Instrument{1, "AAA", 10, 1};
-    if (id == 2) return nq::Instrument{2, "BBB", 5, 100};
-    return std::nullopt;
-}
+enum TaColumn : std::size_t {
+    kRet, kGap, kRv, kGk, kNatr, kEmaDev, kAdx, kDonchianPos, kRsi, kClv, kRangeAtr, kRvol,
+    kNatrRank, kNatrZ, kClvRank = 22, kClvZ,
+};
 
 static nq_ohlcv Minute(std::int64_t minute, std::uint32_t instrument) {
     const double base = static_cast<double>(minute);
     return Ohlcv(minute * kMin, instrument, 100 + base, 102 + base, 99 + base, 101 + base, 1 + 0.5 * base);
 }
 
-static bool RowIs(const nq::RowBuffer& rows, std::size_t i, std::int64_t ts, double close, double volume, double count) {
-    if (i >= rows.RowCount() || rows.Ts(i) != ts) return false;
-    const auto r = rows.Row(i);
-    return Near(r[0], close) && Near(r[1], 3) && Near(r[2], volume) && Near(r[3], count);
+struct BarRow {
+    double close, range, volume, count;
+};
+
+static bool RowIs(const nq::RowBuffer& rows, std::size_t i, std::int64_t ts, const BarRow& want) {
+    return RowIs(rows, i, ts, std::array{want.close, want.range, want.volume, want.count});
 }
 
 static int TestPipeline() {
@@ -51,14 +52,19 @@ static int TestPipeline() {
         pipe.Engine().Advance(minute * kMin);
         pipe.Apply(Minute(minute, 0));
     }
-    CHECK(each.RowCount() == 7 && RowIs(each, 0, 0, 101, 1, 1) && RowIs(each, 6, 6 * kMin, 107, 4, 1));
-    CHECK(one_minute.RowCount() == 6 && RowIs(one_minute, 0, kMin, 101, 1, 1) && RowIs(one_minute, 5, 6 * kMin, 106, 3.5, 1));
-    CHECK(five_minutes.RowCount() == 1 && RowIs(five_minutes, 0, 5 * kMin, 105, 10, 5));
+    CHECK(each.RowCount() == 7 &&
+          RowIs(each, 0, 0, {.close = 101, .range = 3, .volume = 1, .count = 1}) &&
+          RowIs(each, 6, 6 * kMin, {.close = 107, .range = 3, .volume = 4, .count = 1}));
+    CHECK(one_minute.RowCount() == 6 &&
+          RowIs(one_minute, 0, kMin, {.close = 101, .range = 3, .volume = 1, .count = 1}) &&
+          RowIs(one_minute, 5, 6 * kMin, {.close = 106, .range = 3, .volume = 3.5, .count = 1}));
+    CHECK(five_minutes.RowCount() == 1 && RowIs(five_minutes, 0, 5 * kMin, {.close = 105, .range = 3, .volume = 10, .count = 5}));
 
     pipe.Close();
     CHECK(each.RowCount() == 7);
-    CHECK(one_minute.RowCount() == 7 && RowIs(one_minute, 6, 7 * kMin, 107, 4, 1));
-    CHECK(five_minutes.RowCount() == 2 && RowIs(five_minutes, 1, 10 * kMin, 107, 7.5, 2));
+    CHECK(one_minute.RowCount() == 7 && RowIs(one_minute, 6, 7 * kMin, {.close = 107, .range = 3, .volume = 4, .count = 1}));
+    CHECK(five_minutes.RowCount() == 2 &&
+          RowIs(five_minutes, 1, 10 * kMin, {.close = 107, .range = 3, .volume = 7.5, .count = 2}));
     return 0;
 }
 
@@ -67,7 +73,7 @@ static int TestTable() {
     catalog.LoadPlugin(NQ_EXAMPLE_OHLCV_FEATURES_PATH, "test");
     catalog.AddSampler(nq::SamplerSpec::Time("1m", kMin));
 
-    nq::PipelineTable<nq_ohlcv> table(catalog, &Resolve);
+    nq::PipelineTable<nq_ohlcv> table(catalog, &ResolveTwoInstruments);
     table.Apply(Minute(0, 1));
     table.Apply(Minute(0, 2));
     table.Apply(Minute(1, 1));
@@ -79,11 +85,13 @@ static int TestTable() {
 
     const nq::RowBuffer& a = table.Find(1)->Engine().GetSampler(0).Rows();
     const nq::RowBuffer& b = table.Find(2)->Engine().GetSampler(0).Rows();
-    CHECK(a.RowCount() == 2 && RowIs(a, 0, kMin, 101, 1, 1) && RowIs(a, 1, 2 * kMin, 102, 1.5, 1));
-    CHECK(b.RowCount() == 1 && RowIs(b, 0, kMin, 101, 1, 1));
+    CHECK(a.RowCount() == 2 &&
+          RowIs(a, 0, kMin, {.close = 101, .range = 3, .volume = 1, .count = 1}) &&
+          RowIs(a, 1, 2 * kMin, {.close = 102, .range = 3, .volume = 1.5, .count = 1}));
+    CHECK(b.RowCount() == 1 && RowIs(b, 0, kMin, {.close = 101, .range = 3, .volume = 1, .count = 1}));
 
     table.Close();
-    CHECK(a.RowCount() == 3 && RowIs(a, 2, 3 * kMin, 103, 2, 1));
+    CHECK(a.RowCount() == 3 && RowIs(a, 2, 3 * kMin, {.close = 103, .range = 3, .volume = 2, .count = 1}));
     CHECK(b.RowCount() == 1);
     return 0;
 }
@@ -108,52 +116,42 @@ static int TestSession() {
     CHECK(table.Find(2)->Engine().GetInstrument().symbol == "SYN2");
     const nq::RowBuffer& each = table.Find(2)->Engine().GetSampler(0).Rows();
     const nq::RowBuffer& one_minute = table.Find(2)->Engine().GetSampler(1).Rows();
-    CHECK(each.RowCount() == 10 && RowIs(each, 9, 9 * kMin, 110, 2, 1));
-    CHECK(one_minute.RowCount() == 10 && RowIs(one_minute, 9, 10 * kMin, 110, 2, 1));
+    CHECK(each.RowCount() == 10 && RowIs(each, 9, 9 * kMin, {.close = 110, .range = 3, .volume = 2, .count = 1}));
+    CHECK(one_minute.RowCount() == 10 && RowIs(one_minute, 9, 10 * kMin, {.close = 110, .range = 3, .volume = 2, .count = 1}));
     return 0;
-}
-
-template <class Step>
-static bool ThrowsFeedMismatch(Step&& step) {
-    try {
-        step();
-    } catch (const nq::FeedMismatchError&) {
-        return true;
-    }
-    return false;
 }
 
 static int TestFeedRules() {
     nq::FeatureCatalog mbo;
     mbo.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "book");
     CHECK(mbo.GetFeed() == nq::Feed::MBO);
-    CHECK(ThrowsFeedMismatch([&] { mbo.LoadPlugin(NQ_EXAMPLE_OHLCV_FEATURES_PATH, "ohlcv"); }));
-    CHECK(mbo.PluginCount() == 1);
+    CHECK(Throws<nq::FeedMismatchError>([&] { mbo.LoadPlugin(NQ_EXAMPLE_OHLCV_FEATURES_PATH, "ohlcv"); }));
+    CHECK(mbo.Plugins().size() == 1);
     mbo.AddSampler(nq::SamplerSpec::Trades("t", 1));
     mbo.RequireFeed(nq::Feed::MBO);
-    CHECK(ThrowsFeedMismatch([&] { mbo.RequireFeed(nq::Feed::OHLCV); }));
+    CHECK(Throws<nq::FeedMismatchError>([&] { mbo.RequireFeed(nq::Feed::OHLCV); }));
 
     nq::FeatureCatalog ohlcv;
     ohlcv.LoadPlugin(NQ_EXAMPLE_OHLCV_FEATURES_PATH, "ohlcv");
-    CHECK(ThrowsFeedMismatch([&] { ohlcv.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "book"); }));
-    CHECK(ThrowsFeedMismatch([&] { ohlcv.AddSampler(nq::SamplerSpec::Trades("t", 1)); }));
+    CHECK(Throws<nq::FeedMismatchError>([&] { ohlcv.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "book"); }));
+    CHECK(Throws<nq::FeedMismatchError>([&] { ohlcv.AddSampler(nq::SamplerSpec::Trades("t", 1)); }));
     ohlcv.AddSampler(nq::SamplerSpec::Events("e", 1));
     ohlcv.RequireFeed(nq::Feed::OHLCV);
-    CHECK(ThrowsFeedMismatch([&] { ohlcv.RequireFeed(nq::Feed::MBO); }));
+    CHECK(Throws<nq::FeedMismatchError>([&] { ohlcv.RequireFeed(nq::Feed::MBO); }));
 
     nq::FeatureCatalog no_plugins;
     no_plugins.AddSampler(nq::SamplerSpec::Trades("t", 1));
     no_plugins.RequireFeed(nq::Feed::MBO);
-    CHECK(ThrowsFeedMismatch([&] { no_plugins.RequireFeed(nq::Feed::OHLCV); }));
+    CHECK(Throws<nq::FeedMismatchError>([&] { no_plugins.RequireFeed(nq::Feed::OHLCV); }));
     return 0;
 }
 
 static int TestTechnicalAnalysis() {
     nq::FeatureCatalog catalog;
     catalog.LoadPlugin(NQ_TA_OHLCV_PATH, "ta");
-    CHECK(catalog.Columns().size() == 28 && catalog.Columns()[0].name == "ta.ret" && catalog.Columns()[11].name == "ta.rvol");
-    CHECK(catalog.Columns()[12].name == "ta.natr_rank" && catalog.Columns()[13].name == "ta.natr_z");
-    CHECK(catalog.Columns()[27].name == "ta.rvol_z" && catalog.Columns()[27].kind == NQ_COLUMN_SNAPSHOT);
+    CHECK(catalog.Columns().size() == 28 && catalog.Columns()[kRet].name == "ta.ret" && catalog.Columns()[kRvol].name == "ta.rvol");
+    CHECK(catalog.Columns()[kNatrRank].name == "ta.natr_rank" && catalog.Columns()[kNatrZ].name == "ta.natr_z");
+    CHECK(catalog.Columns().back().name == "ta.rvol_z" && catalog.Columns().back().kind == NQ_COLUMN_SNAPSHOT);
     catalog.AddSampler(nq::SamplerSpec::Events("each", 1));
 
     nq::Pipeline<nq_ohlcv> pipe(catalog, nq::Instrument{0, "TEST", 1, 1});
@@ -165,16 +163,16 @@ static int TestTechnicalAnalysis() {
     CHECK(each.RowCount() == 60);
 
     const auto warming = each.Row(12);
-    CHECK(std::isnan(warming[4]) && std::isnan(warming[5]) && std::isnan(warming[6]) && std::isnan(warming[7]));
-    CHECK(Near(warming[8], 100) && std::isnan(warming[10]) && std::isnan(warming[11]));
+    CHECK(std::isnan(warming[kNatr]) && std::isnan(warming[kEmaDev]) && std::isnan(warming[kAdx]) && std::isnan(warming[kDonchianPos]));
+    CHECK(Near(warming[kRsi], 100) && std::isnan(warming[kRangeAtr]) && std::isnan(warming[kRvol]));
 
     const auto last = each.Row(59);
     const double ret = std::log(160.0 / 159.0);
     const double log_range = std::log(161.0 / 158.0);
-    CHECK(Near(last[0], ret) && Near(last[1], 0) && Near(last[2], ret * ret));
-    CHECK(Near(last[3], 0.5 * log_range * log_range - (2 * std::numbers::ln2 - 1) * ret * ret));
-    CHECK(Near(last[4], 3.0 / 160.0) && Near(last[5], 9.5 / 3.0) && Near(last[6], 100) && Near(last[7], 21.0 / 22.0));
-    CHECK(Near(last[8], 100) && Near(last[9], 2.0 / 3.0) && Near(last[10], 1) && Near(last[11], 30.5 / 25.25));
+    CHECK(Near(last[kRet], ret) && Near(last[kGap], 0) && Near(last[kRv], ret * ret));
+    CHECK(Near(last[kGk], 0.5 * log_range * log_range - (2 * std::numbers::ln2 - 1) * ret * ret));
+    CHECK(Near(last[kNatr], 3.0 / 160.0) && Near(last[kEmaDev], 9.5 / 3.0) && Near(last[kAdx], 100) && Near(last[kDonchianPos], 21.0 / 22.0));
+    CHECK(Near(last[kRsi], 100) && Near(last[kClv], 2.0 / 3.0) && Near(last[kRangeAtr], 1) && Near(last[kRvol], 30.5 / 25.25));
 
     nq::FeatureCatalog rth_only;
     rth_only.LoadPlugin(NQ_TA_OHLCV_PATH, "ta", {{"rth_only", "1"}});
@@ -185,9 +183,9 @@ static int TestTechnicalAnalysis() {
     rth_pipe.Apply(Ohlcv(ten_eastern, 0, 200, 202, 199, 201, 1));
     rth_pipe.Apply(Ohlcv(ten_eastern + kMin, 0, 201, 203, 200, 202, 1));
     const nq::RowBuffer& rth_rows = rth_pipe.Engine().GetSampler(0).Rows();
-    CHECK(rth_rows.RowCount() == 5 && Near(rth_rows.Row(2)[0], 0) && std::isnan(rth_rows.Row(2)[9]));
-    CHECK(Near(rth_rows.Row(3)[0], 0) && Near(rth_rows.Row(3)[9], 2.0 / 3.0));
-    CHECK(Near(rth_rows.Row(4)[0], std::log(202.0 / 201.0)) && Near(rth_rows.Row(4)[1], 0));
+    CHECK(rth_rows.RowCount() == 5 && Near(rth_rows.Row(2)[kRet], 0) && std::isnan(rth_rows.Row(2)[kClv]));
+    CHECK(Near(rth_rows.Row(3)[kRet], 0) && Near(rth_rows.Row(3)[kClv], 2.0 / 3.0));
+    CHECK(Near(rth_rows.Row(4)[kRet], std::log(202.0 / 201.0)) && Near(rth_rows.Row(4)[kGap], 0));
     return 0;
 }
 
@@ -213,7 +211,6 @@ static std::vector<double> ZScores(const std::vector<double>& x) {
 
 static int TestTechnicalCross() {
     constexpr std::int64_t kHour = 60 * kMin;
-    constexpr std::size_t kClv = 9, kNatrRank = 12, kNatrZ = 13, kClvRank = 22, kClvZ = 23;
 
     nq::FeatureCatalog catalog;
     catalog.LoadPlugin(NQ_TA_OHLCV_PATH, "ta", {{"cross_min", "3"}});
@@ -231,42 +228,36 @@ static int TestTechnicalCross() {
     table.Apply(ClvBar(2 * kHour, 1, 100));
     table.Apply(ClvBar(2 * kHour, 2, 100));
     CHECK(std::isnan(table.Find(4)->Engine().ReadAll()[kClvRank]));
-    // Every instrument gets the same bar, so clv is 5/11 for all of them.
     for (std::uint32_t id = 1; id <= 5; ++id) table.Apply(Ohlcv(3 * kHour, id, 95, 101, 90, 95, 1));
     table.Close();
 
-    const nq::RowBuffer& a = table.Find(1)->Engine().GetSampler(0).Rows();
-    const nq::RowBuffer& b = table.Find(2)->Engine().GetSampler(0).Rows();
-    const nq::RowBuffer& c = table.Find(3)->Engine().GetSampler(0).Rows();
-    const nq::RowBuffer& d = table.Find(4)->Engine().GetSampler(0).Rows();
-    const nq::RowBuffer& q = table.Find(5)->Engine().GetSampler(0).Rows();
-    CHECK(a.RowCount() == 4 && b.RowCount() == 4 && c.RowCount() == 3 && d.RowCount() == 2 && q.RowCount() == 2);
+    const nq::RowBuffer& aaa = table.Find(1)->Engine().GetSampler(0).Rows();
+    const nq::RowBuffer& bbb = table.Find(2)->Engine().GetSampler(0).Rows();
+    const nq::RowBuffer& ccc = table.Find(3)->Engine().GetSampler(0).Rows();
+    const nq::RowBuffer& ddd = table.Find(4)->Engine().GetSampler(0).Rows();
+    const nq::RowBuffer& qqq = table.Find(5)->Engine().GetSampler(0).Rows();
+    CHECK(aaa.RowCount() == 4 && bbb.RowCount() == 4 && ccc.RowCount() == 3 && ddd.RowCount() == 2 && qqq.RowCount() == 2);
 
-    // At 1h all five are in the cross-section, QQQ too. BBB and QQQ tie at the average rank.
-    const std::vector<double> z1 = ZScores({0.25, 0.5, 0.75, 1.0, 0.5});
-    CHECK(a.Ts(0) == kHour && Near(a.At(0, kClv), 0.25) && Near(a.At(0, kClvRank), 0.0) && Near(a.At(0, kClvZ), z1[0]));
-    CHECK(Near(b.At(0, kClvRank), 0.375) && Near(b.At(0, kClvZ), z1[1]));
-    CHECK(Near(c.At(0, kClvRank), 0.75) && Near(c.At(0, kClvZ), z1[2]));
-    CHECK(Near(d.At(0, kClvRank), 1.0) && Near(d.At(0, kClvZ), z1[3]));
-    CHECK(Near(q.At(0, kClvRank), 0.375) && Near(q.At(0, kClvZ), z1[4]));
-    // natr is NaN while the average true range warms up, so it has no cross-section.
-    CHECK(std::isnan(a.At(0, 4)) && std::isnan(a.At(0, kNatrRank)) && std::isnan(a.At(0, kNatrZ)));
+    const std::vector<double> clv_z_all_five = ZScores({0.25, 0.5, 0.75, 1.0, 0.5});
+    CHECK(aaa.Ts(0) == kHour && Near(aaa.At(0, kClv), 0.25) && Near(aaa.At(0, kClvRank), 0.0) && Near(aaa.At(0, kClvZ), clv_z_all_five[0]));
+    CHECK(Near(bbb.At(0, kClvRank), 0.375) && Near(bbb.At(0, kClvZ), clv_z_all_five[1]));
+    CHECK(Near(ccc.At(0, kClvRank), 0.75) && Near(ccc.At(0, kClvZ), clv_z_all_five[2]));
+    CHECK(Near(ddd.At(0, kClvRank), 1.0) && Near(ddd.At(0, kClvZ), clv_z_all_five[3]));
+    CHECK(Near(qqq.At(0, kClvRank), 0.375) && Near(qqq.At(0, kClvZ), clv_z_all_five[4]));
+    CHECK(std::isnan(aaa.At(0, kNatr)) && std::isnan(aaa.At(0, kNatrRank)) && std::isnan(aaa.At(0, kNatrZ)));
 
-    // At 2h only AAA, BBB and CCC have a bar. DDD and QQQ keep their 1h values but stay out.
-    const std::vector<double> z2 = ZScores({1.0, 0.0, 0.5});
-    CHECK(a.Ts(1) == 2 * kHour && Near(a.At(1, kClvRank), 1.0) && Near(a.At(1, kClvZ), z2[0]));
-    CHECK(Near(b.At(1, kClvRank), 0.0) && Near(b.At(1, kClvZ), z2[1]));
-    CHECK(Near(c.At(1, kClvRank), 0.5) && Near(c.At(1, kClvZ), z2[2]));
+    const std::vector<double> clv_z_aaa_bbb_ccc = ZScores({1.0, 0.0, 0.5});
+    CHECK(aaa.Ts(1) == 2 * kHour && Near(aaa.At(1, kClvRank), 1.0) && Near(aaa.At(1, kClvZ), clv_z_aaa_bbb_ccc[0]));
+    CHECK(Near(bbb.At(1, kClvRank), 0.0) && Near(bbb.At(1, kClvZ), clv_z_aaa_bbb_ccc[1]));
+    CHECK(Near(ccc.At(1, kClvRank), 0.5) && Near(ccc.At(1, kClvZ), clv_z_aaa_bbb_ccc[2]));
     const auto& blocks = table.Crosses()[0].Blocks();
     CHECK(blocks.size() == 4 && blocks[1].ts == 2 * kHour);
     CHECK(blocks[1].instruments == (std::vector<std::uint32_t>{1, 2, 3}));
 
-    // At 3h only AAA and BBB have a bar, below cross_min 3.
-    CHECK(a.Ts(2) == 3 * kHour && std::isnan(a.At(2, kClvRank)) && std::isnan(a.At(2, kClvZ)));
-    CHECK(std::isnan(b.At(2, kClvRank)) && Near(b.At(2, kClv), 0.5));
+    CHECK(aaa.Ts(2) == 3 * kHour && std::isnan(aaa.At(2, kClvRank)) && std::isnan(aaa.At(2, kClvZ)));
+    CHECK(std::isnan(bbb.At(2, kClvRank)) && Near(bbb.At(2, kClv), 0.5));
 
-    // At 4h the equal clv values tie at rank 0.5 with z exactly 0, though their mean is off by rounding.
-    for (const nq::RowBuffer* rows : {&a, &b, &c, &d, &q}) {
+    for (const nq::RowBuffer* rows : {&aaa, &bbb, &ccc, &ddd, &qqq}) {
         const std::size_t last = rows->RowCount() - 1;
         CHECK(rows->Ts(last) == 4 * kHour && Near(rows->At(last, kClvRank), 0.5) && rows->At(last, kClvZ) == 0.0);
     }

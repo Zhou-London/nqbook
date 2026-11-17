@@ -2,9 +2,9 @@
 #include <concepts>
 #include <csignal>
 #include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -98,16 +98,9 @@ void AddOutputOptions(CLI::App* cmd, OutputOptions& opt) {
 /* ---------- Pipeline Assembling ---------- */
 int LoadCatalog(const PluginOptions& opt, nq::FeatureCatalog& catalog) {
     std::vector<nq::SamplerSpec> specs;
-    if (int rc = Attempt(kSamplerInvalid, [&] {
-            for (const auto& s : opt.samplers) {
-                nq::SamplerSpec spec = nq::ParseSamplerSpec(s);
-                spec.fill_gaps = opt.fill_gaps && spec.trigger == nq::Trigger::Time;
-                specs.push_back(std::move(spec));
-            }
-        })) return rc;
-
     std::vector<nq::CrossArg> crosses;
     if (int rc = Attempt(kSamplerInvalid, [&] {
+            for (const auto& s : opt.samplers) specs.push_back(nq::ParseSamplerSpec(s, opt.fill_gaps));
             for (const auto& c : opt.crosses) crosses.push_back(nq::ParseCrossArg(c));
         })) return rc;
 
@@ -126,19 +119,6 @@ int LoadCatalog(const PluginOptions& opt, nq::FeatureCatalog& catalog) {
     return Attempt(kSamplerInvalid, [&] {
         for (auto& spec : specs) catalog.AddSampler(std::move(spec));
         for (auto& c : crosses) catalog.AddCross(std::move(c.name), c.plugin, c.every, opt.fill_gaps);
-    });
-}
-
-int ParseAdapterParams(const AdapterOptions& opt, nq::ParamsBuilder& pb) {
-    pb.PriceScale(NQ_PRICE_SCALE).QtyScale(NQ_QTY_SCALE);
-    return Attempt(kParamsInvalid, [&] {
-        nq::PluginFile f = nq::DescribePluginFile(opt.adapter);
-        for (const auto& [k, v] : f.params) pb.Set(k, v);
-        for (const auto& kv : opt.params) {
-            const auto eq = kv.find('=');
-            if (eq == std::string::npos || eq == 0) throw std::invalid_argument("--adapter-param expects KEY=VALUE: '" + kv + "'");
-            pb.Set(kv.substr(0, eq), kv.substr(eq + 1));
-        }
     });
 }
 
@@ -164,9 +144,8 @@ int Check(const PluginOptions& popt, const std::string& format) {
 
 template <class Record>
 int RunSession(const nq::FeatureCatalog& catalog, const nq::host::AdapterPlugin& adapter, const nq_params& params,
-               std::unique_ptr<nq::ParquetWriter> writer, std::size_t queue_capacity, const std::string& csv_dir) {
-    const bool parquet = writer != nullptr;
-
+               std::unique_ptr<nq::ParquetWriter> writer, std::size_t queue_capacity,
+               const std::optional<std::filesystem::path>& csv_dir) {
     std::optional<nq::Session<Record>> session;
     nq::RunResult result;
     if (int rc = Attempt(kAdapterFailed, [&] {
@@ -175,16 +154,16 @@ int RunSession(const nq::FeatureCatalog& catalog, const nq::host::AdapterPlugin&
         })) return rc;
     nq::PrintFeedReport(stderr, session->Pipelines(), result);
 
-    if (parquet) {
-        if (!result.writer_error.empty()) {
-            std::fprintf(stderr, "nqhpc: %s\n", result.writer_error.c_str());
+    if (result.writer) {
+        if (!result.writer->error.empty()) {
+            std::fprintf(stderr, "nqhpc: %s\n", result.writer->error.c_str());
             return kOutputFailed;
         }
         for (const auto& p : session->Writer()->Writer().Files()) std::fprintf(stderr, "wrote %s\n", p.string().c_str());
     }
-    if (!csv_dir.empty()) {
+    if (csv_dir) {
         if (int rc = Attempt(kOutputFailed, [&] {
-                for (const auto& p : nq::WriteSamplerCsv(session->Pipelines(), csv_dir)) {
+                for (const auto& p : nq::WriteCsv(session->Pipelines(), *csv_dir)) {
                     std::fprintf(stderr, "wrote %s\n", p.string().c_str());
                 }
             })) return rc;
@@ -198,30 +177,27 @@ int RunSession(const nq::FeatureCatalog& catalog, const nq::host::AdapterPlugin&
     return kOk;
 }
 
-int Run(const PluginOptions& popt, const AdapterOptions& aopt, const OutputOptions& oopt, bool feed_only) {
-    nq::FeatureCatalog catalog;
-    if (!feed_only) {
-        if (int rc = LoadCatalog(popt, catalog)) return rc;
-    }
-
+int RunFeed(const nq::FeatureCatalog& catalog, const AdapterOptions& aopt, const OutputOptions* output) {
     nq::ParamsBuilder pb;
-    if (int rc = ParseAdapterParams(aopt, pb)) return rc;
+    if (int rc = Attempt(kParamsInvalid, [&] { pb = nq::ScaledParams(nq::AdapterParams(aopt.adapter, aopt.params)); })) return rc;
 
     std::optional<nq::host::AdapterPlugin> adapter;
     if (int rc = Attempt(kPluginLoad, [&] { adapter.emplace(aopt.adapter); })) return rc;
 
-    const nq::Feed feed = static_cast<nq::Feed>(adapter->Schema().feed);
+    const nq::Feed feed = nq::FeedOf(*adapter);
     if (int rc = Attempt(kFeedMismatch, [&] { catalog.RequireFeed(feed); })) return rc;
 
-    const bool parquet = !feed_only && !oopt.dir.empty() && oopt.format == "parquet";
-    const bool csv = !feed_only && !oopt.dir.empty() && oopt.format == "csv";
     std::unique_ptr<nq::ParquetWriter> writer;
-    if (parquet) {
-        if (int rc = Attempt(kOutputFailed, [&] {
-                writer = std::make_unique<nq::ParquetWriter>(catalog, oopt.dir, nq::ParquetOptions{oopt.row_group_rows});
-            })) return rc;
+    std::optional<std::filesystem::path> csv_dir;
+    if (output && !output->dir.empty()) {
+        if (output->format == "csv") {
+            csv_dir = output->dir;
+        } else if (int rc = Attempt(kOutputFailed, [&] {
+                       writer = std::make_unique<nq::ParquetWriter>(catalog, output->dir, nq::ParquetOptions{output->row_group_rows});
+                   })) {
+            return rc;
+        }
     }
-    const std::string csv_dir = csv ? oopt.dir : "";
 
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
@@ -231,6 +207,14 @@ int Run(const PluginOptions& popt, const AdapterOptions& aopt, const OutputOptio
     }
     return RunSession<nq_mbo>(catalog, *adapter, *pb.Build(), std::move(writer), aopt.queue_capacity, csv_dir);
 }
+
+int Run(const PluginOptions& popt, const AdapterOptions& aopt, const OutputOptions& oopt) {
+    nq::FeatureCatalog catalog;
+    if (int rc = LoadCatalog(popt, catalog)) return rc;
+    return RunFeed(catalog, aopt, &oopt);
+}
+
+int CheckFeed(const AdapterOptions& aopt) { return RunFeed(nq::FeatureCatalog{}, aopt, nullptr); }
 
 int PrintHelp(CLI::App& app, const std::string& topic) {
     if (topic.empty()) {
@@ -278,7 +262,6 @@ int main(int argc, char** argv) {
 
     if (help->parsed()) return PrintHelp(app, help_topic);
     if (check->parsed()) return Check(check_plugins, check_format);
-    if (run->parsed()) return Run(run_plugins, run_adapter, run_output, false);
-    if (feed->parsed()) return Run(PluginOptions{}, feed_adapter, OutputOptions{}, true);
-    return kOk;
+    if (run->parsed()) return Run(run_plugins, run_adapter, run_output);
+    return CheckFeed(feed_adapter);
 }

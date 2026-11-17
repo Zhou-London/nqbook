@@ -1,9 +1,11 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <vector>
+
+#include <Bitmap.h>
 
 namespace nq {
 
@@ -14,7 +16,7 @@ public:
     static constexpr std::uint32_t kSlotBits = 12;
     static constexpr std::uint32_t kSlots = 1u << kSlotBits;
 
-    TimerWheel() : slots_(kTotalSlots), used_(kTotalSlots / 64, 0) {}
+    TimerWheel() : slots_(kTotalSlots), used_(kTotalSlots) {}
 
     void WakeBy(std::uint32_t key, std::int64_t due);
 
@@ -73,14 +75,10 @@ private:
     std::int64_t IdleUntil() const noexcept;
     std::int64_t NextUsedTick(std::int64_t from) const noexcept;
     std::int64_t NextUsedLap(std::int64_t from) const noexcept;
-    std::uint32_t StepsToUsedSlot(std::uint32_t slot) const noexcept;
-    std::uint32_t FindUsedSlot(std::uint32_t first, std::uint32_t last) const noexcept;
-
-    void MarkUsed(std::uint32_t slot) noexcept { used_[slot / 64] |= std::uint64_t{1} << (slot % 64); }
-    void MarkEmpty(std::uint32_t slot) noexcept { used_[slot / 64] &= ~(std::uint64_t{1} << (slot % 64)); }
+    std::optional<std::uint32_t> StepsToUsedSlot(std::uint32_t slot) const noexcept;
 
     std::vector<Slot> slots_;
-    std::vector<std::uint64_t> used_;
+    Bitmap used_;
     std::vector<Timer> timers_;
     std::vector<Ready> ready_;
     std::int64_t tick_ = 0;

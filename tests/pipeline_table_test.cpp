@@ -1,8 +1,6 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstring>
-#include <optional>
 #include <thread>
 
 #include <nq/adapter_host.hpp>
@@ -16,19 +14,13 @@
 
 using namespace nqtest;
 
-static std::optional<nq::Instrument> Resolve(std::uint32_t id) {
-    if (id == 1) return nq::Instrument{1, "AAA", 10, 1};
-    if (id == 2) return nq::Instrument{2, "BBB", 5, 100};
-    return std::nullopt;
-}
-
 static int TestMarket() {
     nq::FeatureCatalog catalog;
     catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "test");
     catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
     catalog.AddSampler(nq::SamplerSpec::Trades("t", 1).Columns({"test.trades"}));
 
-    nq::PipelineTable<nq_mbo> table(catalog, &Resolve, {.expected_orders = 16}, 4);
+    nq::PipelineTable<nq_mbo> table(catalog, &ResolveTwoInstruments, {.expected_orders = 16}, 4);
     CHECK(table.InstrumentCount() == 0 && table.Entries().size() == 4 && table.Find(9) == nullptr);
 
     table.Apply(Add(Sec(0.1), 1, 1, NQ_BID, P(100.50), Q(7)));
@@ -62,7 +54,7 @@ static int TestMarket() {
     CHECK(table.Stats().instrument_unknown == 1 && table.Entries()[3].stats.resolved == false);
     CHECK(table.Stats().events == 9 && table.Stats().ts_regressions == 1);
     CHECK(table.Entries()[1].stats.events == 5 && table.Entries().at(1).stats.ts_regressions == 0);
-    CHECK(table.Stats().first_ts == static_cast<std::int64_t>(0.1 * kSec) && table.Stats().last_ts == kSec);
+    CHECK(table.Stats().first_ts == Sec(0.1) && table.Stats().last_ts == kSec);
 
     table.Apply(Add(Sec(2.5), 1, 7, NQ_BID, P(100.00), Q(1)));
     CHECK(a.RowCount() == 2 && a.Ts(1) == 2 * kSec && std::isnan(a.At(1, 0)));
@@ -76,7 +68,7 @@ static int TestMarket() {
     CHECK(c.RowCount() == 1);
 
     table.Apply(Add(Sec(2.6), 700, 1, NQ_BID, P(1.0), Q(1)));
-    CHECK(table.InstrumentCount() == 4 && table.Entries().size() == 701 && table.Entries()[700].id == 700);
+    CHECK(table.InstrumentCount() == 4 && table.Entries().size() == 701 && table.Find(700)->Engine().GetInstrument().id == 700);
     CHECK(table.Find(700)->Engine().GetInstrument().symbol == "#700" && table.Find(699) == nullptr);
     return 0;
 }
@@ -85,9 +77,9 @@ static int TestIdleBars() {
     nq::FeatureCatalog catalog;
     catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "test");
     catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
-    catalog.AddSampler(nq::SamplerSpec::Time("1s_fill", kSec).FillGaps());
+    catalog.AddSampler(nq::SamplerSpec::Time("1s_fill", kSec, true));
 
-    nq::PipelineTable<nq_mbo> table(catalog, &Resolve, {.expected_orders = 16}, 4);
+    nq::PipelineTable<nq_mbo> table(catalog, &ResolveTwoInstruments, {.expected_orders = 16}, 4);
     table.Apply(Add(Sec(0.5), 2, 1, NQ_BID, P(50.00), Q(1)));
     table.Apply(Add(Sec(0.6), 1, 1, NQ_BID, P(100.00), Q(1)));
     table.Apply(Add(Sec(1.5), 1, 2, NQ_BID, P(100.00), Q(1)));
@@ -110,7 +102,7 @@ static int TestQueueDrain() {
     nq::FeatureCatalog catalog;
     catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "test");
     catalog.AddSampler(nq::SamplerSpec::Time("1s", kSec));
-    nq::PipelineTable<nq_mbo> table(catalog, &Resolve, {.expected_orders = 16}, 4);
+    nq::PipelineTable<nq_mbo> table(catalog, &ResolveTwoInstruments, {.expected_orders = 16}, 4);
 
     nlib::single_queue<nq_mbo> q(64);
     CHECK(q.try_push(Add(Sec(0.1), 1, 1, NQ_BID, P(10), Q(1))));
@@ -119,10 +111,10 @@ static int TestQueueDrain() {
     CHECK(table.Consume(q) == 3 && q.empty());
     const nq::Pipeline<nq_mbo>& pipe = *table.Find(1);
     const nq::RowBuffer& bars = pipe.Engine().GetSampler(0).Rows();
-    CHECK(bars.RowCount() == 1 && RowIs(bars, 0, Sec(1.0), 1.0, 10.5, 0, 0, 0));
+    CHECK(bars.RowCount() == 1 && RowIs(bars, 0, Sec(1.0), {.spread = 1.0, .mid = 10.5}));
     CHECK(pipe.Book().BestAsk() == nullptr);
     table.Close();
-    CHECK(bars.RowCount() == 2 && RowIs(bars, 1, Sec(2.0), NAN, NAN, 1, 0, 1));
+    CHECK(bars.RowCount() == 2 && RowIs(bars, 1, Sec(2.0), {.spread = NAN, .mid = NAN, .buy_vol = 1, .trades = 1}));
     return 0;
 }
 

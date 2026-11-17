@@ -1,7 +1,5 @@
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -10,6 +8,7 @@
 #include <nq/cross.hpp>
 
 #include <Defaults.h>
+#include <Feature/BarClock.h>
 
 namespace nq {
 
@@ -21,8 +20,7 @@ public:
 
 struct CrossSpec {
     std::string name;
-    std::int64_t every = defaults::kSamplerPeriodNs;
-    bool fill_gaps = false;
+    TimeBars bars{defaults::kSamplerPeriodNs};
     std::vector<std::string> inputs;
     std::vector<std::string> outputs;
     std::function<std::unique_ptr<CrossOperator>()> make;

@@ -21,7 +21,6 @@ class AdapterEngine {
 public:
     /* ---------- CTR/DTRs ---------- */
     AdapterEngine(host::AdapterInstance adapter, std::size_t queue_capacity);
-    ~AdapterEngine();
 
     AdapterEngine(const AdapterEngine&) = delete;
     AdapterEngine& operator=(const AdapterEngine&) = delete;
@@ -35,7 +34,6 @@ public:
     nlib::single_queue<Record>& Queue() noexcept { return queue_; }
     bool Ended() const noexcept { return ended_.load(std::memory_order_acquire); }
     int Status() const noexcept { return status_.load(std::memory_order_acquire); }
-    std::uint64_t Pushed() const noexcept { return pushed_.load(std::memory_order_relaxed); }
     std::uint64_t Stalls() const noexcept { return stalls_.load(std::memory_order_relaxed); }
 
 private:
@@ -49,10 +47,9 @@ private:
     nlib::single_queue<Record> queue_;
     std::unordered_set<std::uint32_t> seen_;
     mutable std::mutex mu_;
-    std::map<std::uint32_t, std::optional<Instrument>> instruments_;
+    std::map<std::uint32_t, Instrument> instruments_;
     std::atomic<bool> ended_{false};
     std::atomic<int> status_{0};
-    std::atomic<std::uint64_t> pushed_{0};
     std::atomic<std::uint64_t> stalls_{0};
     std::jthread thread_;
 };

@@ -71,7 +71,7 @@ AdapterEngine          Session::Run                         WriterEngine
 - `PipelineTable` maps each instrument id to a `Pipeline`. An MBO `Pipeline` holds an `Orderbook` and a `FeatureEngine`. An OHLCV `Pipeline` holds a `FeatureEngine` only.
 - `Orderbook` keeps pooled orders in price levels and reduces resting orders on trades.
 - `FeatureEngine` calls the feature plugins on each record and passes their values to the samplers.
-- `WriterEngine` writes one Parquet file per sampler, plus `instruments.parquet`. Each sampler row holds the instrument id and its symbol.
+- `WriterEngine` writes one Parquet file per table (sampler or cross), plus `instruments.parquet`. Each row holds the instrument id and its symbol.
 
 Sampling has three layers. Each layer uses only the layer below it.
 

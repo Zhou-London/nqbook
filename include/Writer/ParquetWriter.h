@@ -21,21 +21,19 @@ struct ParquetOptions {
 
 class ParquetWriter {
 public:
-    ParquetWriter(const FeatureCatalog& catalog, std::filesystem::path dir, ParquetOptions options = {});
+    ParquetWriter(const FeatureCatalog& catalog, const std::filesystem::path& dir, ParquetOptions options = {});
     ~ParquetWriter();
 
     ParquetWriter(const ParquetWriter&) = delete;
     ParquetWriter& operator=(const ParquetWriter&) = delete;
 
     void Register(const Instrument& instrument);
-    void Write(const FeatureRow& row);
     void Write(const FeatureBlock& block);
     void Close();
 
-    const std::filesystem::path& Dir() const noexcept { return dir_; }
-    std::size_t SamplerCount() const noexcept { return tables_.size(); }
-    const std::filesystem::path& Path(std::size_t sampler) const noexcept;
-    std::uint64_t Rows(std::size_t sampler) const noexcept;
+    std::size_t TableCount() const noexcept { return tables_.size(); }
+    const std::filesystem::path& Path(std::size_t table) const noexcept;
+    std::uint64_t Rows(std::size_t table) const noexcept;
     std::vector<std::filesystem::path> Files() const;
     bool Closed() const noexcept { return closed_; }
 
@@ -45,7 +43,6 @@ private:
     void Flush(Table& t);
     void WriteInstruments();
 
-    std::filesystem::path dir_;
     ParquetOptions options_;
     std::vector<std::unique_ptr<Table>> tables_;
     std::unordered_map<std::uint32_t, Instrument> instruments_;

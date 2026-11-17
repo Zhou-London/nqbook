@@ -1,5 +1,7 @@
 #include <Feature/OrderbookView.h>
 
+#include <cstdint>
+
 namespace nq {
 
 namespace {
@@ -15,26 +17,23 @@ int NthLevel(const Levels& levels, std::uint32_t k, nq_level* out) noexcept {
     return 0;
 }
 
-}  // namespace
+const Orderbook& BookOf(const void* ctx) noexcept { return *static_cast<const Orderbook*>(ctx); }
 
-OrderbookView::OrderbookView(const Orderbook& book) noexcept
-    : book_(&book), view_{this, &OrderbookView::Best, &OrderbookView::Level, &OrderbookView::Ts} {}
-
-int OrderbookView::Best(const void* ctx, std::uint8_t side, nq_level* out) noexcept {
-    const Orderbook& book = *static_cast<const OrderbookView*>(ctx)->book_;
-    const nlib::level* lv = side == NQ_BID ? book.BestBid() : book.BestAsk();
+int Best(const void* ctx, std::uint8_t side, nq_level* out) noexcept {
+    const nlib::level* lv = side == NQ_BID ? BookOf(ctx).BestBid() : BookOf(ctx).BestAsk();
     if (!lv) return 1;
     *out = ToLevel(*lv);
     return 0;
 }
 
-int OrderbookView::Level(const void* ctx, std::uint8_t side, std::uint32_t k, nq_level* out) noexcept {
-    const Orderbook& book = *static_cast<const OrderbookView*>(ctx)->book_;
-    return side == NQ_BID ? NthLevel(book.Bids(), k, out) : NthLevel(book.Asks(), k, out);
+int Level(const void* ctx, std::uint8_t side, std::uint32_t k, nq_level* out) noexcept {
+    return side == NQ_BID ? NthLevel(BookOf(ctx).Bids(), k, out) : NthLevel(BookOf(ctx).Asks(), k, out);
 }
 
-std::int64_t OrderbookView::Ts(const void* ctx) noexcept {
-    return static_cast<const OrderbookView*>(ctx)->book_->LastTs();
-}
+std::int64_t Ts(const void* ctx) noexcept { return BookOf(ctx).LastTs(); }
+
+}  // namespace
+
+nq_book_view MakeBookView(const Orderbook& book) noexcept { return {&book, &Best, &Level, &Ts}; }
 
 }  // namespace nq

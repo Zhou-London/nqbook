@@ -7,16 +7,15 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-
-#include <arrow/io/file.h>
-#include <parquet/arrow/reader.h>
+#include <string_view>
+#include <vector>
 
 #include <Config.h>
 
+#include "parquet_support.hpp"
 #include "support.hpp"
 
 namespace fs = std::filesystem;
-
 
 static std::string Quote(const fs::path& p) { return "'" + p.string() + "'"; }
 
@@ -43,11 +42,16 @@ static Result Run(const std::string& args, const fs::path& tmp, const fs::path& 
 
 static bool Has(const std::string& s, const char* needle) { return s.find(needle) != std::string::npos; }
 
-static std::int64_t ParquetRows(const fs::path& path) {
-    auto file = arrow::io::ReadableFile::Open(path.string()).ValueOrDie();
-    auto reader = parquet::arrow::OpenFile(file, arrow::default_memory_pool()).ValueOrDie();
-    return reader->parquet_reader()->metadata()->num_rows();
+static void WriteFile(const fs::path& path, std::string_view text) { std::ofstream(path) << text; }
+
+static std::vector<std::string> Lines(const fs::path& path) {
+    std::ifstream in(path);
+    std::vector<std::string> lines;
+    for (std::string line; std::getline(in, line);) lines.push_back(line);
+    return lines;
 }
+
+static std::int64_t ParquetRows(const fs::path& path) { return nqtest::ReadParquet(path).table->num_rows(); }
 
 static int TestParsing() {
     CHECK(nq::ParseDuration("1s") == 1'000'000'000);
@@ -56,26 +60,20 @@ static int TestParsing() {
     CHECK(nq::ParseDuration("7ns") == 7);
     CHECK(nq::ParseDuration("2562047h") == 2562047 * 3'600'000'000'000);
     for (const char* too_large : {"2562048h", "9223372036854775808ns", "99999999999999999999s"}) {
-        bool threw = false;
-        try { nq::ParseDuration(too_large); } catch (const std::invalid_argument&) { threw = true; }
-        CHECK(threw);
+        CHECK(nqtest::Throws<std::invalid_argument>([&] { nq::ParseDuration(too_large); }));
     }
     for (const char* bad : {"1", "s", "0s", "1x", "", "-1s"}) {
-        bool threw = false;
-        try { nq::ParseDuration(bad); } catch (const std::invalid_argument&) { threw = true; }
-        CHECK(threw);
+        CHECK(nqtest::Throws<std::invalid_argument>([&] { nq::ParseDuration(bad); }));
     }
 
     nq::SamplerSpec t = nq::ParseSamplerSpec("1s=time:1s");
-    CHECK(t.name == "1s" && t.trigger == nq::Trigger::Time && t.every == 1'000'000'000);
+    CHECK(t.name == "1s" && std::get<nq::TimeBars>(t.trigger).every == 1'000'000'000);
     nq::SamplerSpec e = nq::ParseSamplerSpec("fast=events:100");
-    CHECK(e.name == "fast" && e.trigger == nq::Trigger::Events && e.every == 100);
+    CHECK(e.name == "fast" && std::get<nq::EveryEvents>(e.trigger).every == 100);
     nq::SamplerSpec r = nq::ParseSamplerSpec("t=trades:1");
-    CHECK(r.name == "t" && r.trigger == nq::Trigger::Trades && r.every == 1);
+    CHECK(r.name == "t" && std::get<nq::EveryTrades>(r.trigger).every == 1);
     for (const char* bad : {"1s", "=time:1s", "a=time", "a=time:", "a=tick:1", "a=events:0", "a=events:1s", "a=time:5"}) {
-        bool threw = false;
-        try { nq::ParseSamplerSpec(bad); } catch (const std::invalid_argument&) { threw = true; }
-        CHECK(threw);
+        CHECK(nqtest::Throws<std::invalid_argument>([&] { nq::ParseSamplerSpec(bad); }));
     }
     return 0;
 }
@@ -85,14 +83,8 @@ static int TestFiles(const fs::path& tmp) {
     fs::create_directories(dir);
     fs::copy_file(NQ_EXAMPLE_FEATURES_PATH, dir / "b_test.so", fs::copy_options::overwrite_existing);
     fs::copy_file(NQ_EXAMPLE_FEATURES_PATH, dir / "a_test.so", fs::copy_options::overwrite_existing);
-    {
-        std::ofstream p(dir / "a_test.params");
-        p << "# comment\n\n  min_qty = 5 \nlabel=x=y\n";
-    }
-    {
-        std::ofstream junk(dir / "notes.txt");
-        junk << "ignored\n";
-    }
+    WriteFile(dir / "a_test.params", "# comment\n\n  min_qty = 5 \nlabel=x=y\n");
+    WriteFile(dir / "notes.txt", "ignored\n");
 
     auto files = nq::ScanPluginDir(dir);
     CHECK(files.size() == 2);
@@ -102,10 +94,7 @@ static int TestFiles(const fs::path& tmp) {
     CHECK(files[0].params[1].first == "label" && files[0].params[1].second == "x=y");
     CHECK(files[1].params.empty());
 
-    {
-        std::ofstream p(dir / "b_test.params");
-        p << "novalue\n";
-    }
+    WriteFile(dir / "b_test.params", "novalue\n");
     bool threw = false;
     try { nq::ScanPluginDir(dir); } catch (const std::invalid_argument& e) { threw = Has(e.what(), ":1:"); }
     CHECK(threw);
@@ -115,73 +104,60 @@ static int TestFiles(const fs::path& tmp) {
 
 static int TestCli(const fs::path& tmp) {
     const fs::path dir = tmp / "plugins";
-    const std::string base = "check ";
-
-    Result r = Run(base + "--plugin-dir " + Quote(dir) + " --sampler 1s=time:1s --sampler t=trades:1 --fill-gaps", tmp);
+    Result r = Run("check --plugin-dir " + Quote(dir) + " --sampler 1s=time:1s --sampler t=trades:1 --fill-gaps", tmp);
     CHECK(r.code == 0);
     CHECK(Has(r.out, "plugins (2)") && Has(r.out, "columns (10)") && Has(r.out, "samplers (2)"));
     CHECK(Has(r.out, "a_test.spread") && Has(r.out, "b_test.trades") && Has(r.out, "min_qty=5"));
     CHECK(Has(r.out, "1s               time every=1000000000ns fill_gaps=yes cols=10"));
     CHECK(Has(r.out, "t                trades every=1 fill_gaps=no cols=10"));
 
-    r = Run(base + "--plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --format json", tmp);
+    r = Run("check --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --format json", tmp);
     CHECK(r.code == 0);
     CHECK(Has(r.out, "\"name\": \"example_features\"") && Has(r.out, "\"kind\": \"cumulative\"") && Has(r.out, "\"samplers\": [\n  ]"));
     CHECK(Has(r.out, "\"crosses\": [\n  ]"));
 
     const std::string cross = "--plugin " + Quote(NQ_EXAMPLE_CROSS_FEATURES_PATH);
-    r = Run(base + cross + " --cross x=example_cross_features:1s --fill-gaps", tmp);
+    r = Run("check " + cross + " --cross x=example_cross_features:1s --fill-gaps", tmp);
     CHECK(r.code == 0 && Has(r.out, "crosses (1)"));
     CHECK(Has(r.out, "x                example_cross_features every=1000000000ns fill_gaps=yes inputs=1 cols=4"));
-    r = Run(base + cross + " --cross x=example_cross_features:1s --format json", tmp);
+    r = Run("check " + cross + " --cross x=example_cross_features:1s --format json", tmp);
     CHECK(r.code == 0 && Has(r.out, "\"plugin\": \"example_cross_features\"") && Has(r.out, "\"x.rank\""));
-    r = Run(base + cross + " --cross bad", tmp);
+    r = Run("check " + cross + " --cross bad", tmp);
     CHECK(r.code == 5 && Has(r.err, "NAME=PLUGIN:EVERY"));
-    r = Run(base + cross + " --cross x=nope:1s", tmp);
+    r = Run("check " + cross + " --cross x=nope:1s", tmp);
     CHECK(r.code == 5 && Has(r.err, "unknown plugin"));
-    r = Run(base + "--plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --cross x=example_features:1s", tmp);
+    r = Run("check --plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --cross x=example_features:1s", tmp);
     CHECK(r.code == 5 && Has(r.err, "has no cross"));
-    r = Run(base + cross + " --sampler x=time:1s --cross x=example_cross_features:1s", tmp);
-    CHECK(r.code == 5 && Has(r.err, "duplicate sampler name"));
+    r = Run("check " + cross + " --sampler x=time:1s --cross x=example_cross_features:1s", tmp);
+    CHECK(r.code == 5 && Has(r.err, "duplicate table name"));
 
     const std::string feed = "run --adapter " + Quote(NQ_SYNTHETIC_ADAPTER_PATH) + " --adapter-param count=60 --adapter-param instruments=3 ";
     const fs::path xcsv = tmp / "xcsv";
     r = Run(feed + cross + " --cross x=example_cross_features:10ns --out-format csv --out-dir " + Quote(xcsv), tmp);
     CHECK(r.code == 0 && fs::exists(xcsv / "x.csv"));
-    {
-        std::ifstream in(xcsv / "x.csv");
-        std::string header;
-        std::getline(in, header);
-        CHECK(header == "instrument,symbol,ts,example_cross_features.mid,x.mean,x.z,x.rank");
-    }
+    CHECK(Lines(xcsv / "x.csv").at(0) == "instrument,symbol,ts,example_cross_features.mid,x.mean,x.z,x.rank");
     const fs::path xpq = tmp / "xpq";
     r = Run(feed + cross + " --cross x=example_cross_features:10ns --out-dir " + Quote(xpq), tmp);
     CHECK(r.code == 0 && !Has(r.err, "error=") && ParquetRows(xpq / "x.parquet") == 19);
 
-    r = Run(base + "--plugin " + Quote(NQ_FAKE_PLUGIN_PATH), tmp);
+    r = Run("check --plugin " + Quote(NQ_FAKE_PLUGIN_PATH), tmp);
     CHECK(r.code == 3 && Has(r.err, "abi hash mismatch"));
 
-    r = Run(base + "--plugin " + Quote(dir / "notes.txt"), tmp);
+    r = Run("check --plugin " + Quote(dir / "notes.txt"), tmp);
     CHECK(r.code == 2 && Has(r.err, "dlopen failed"));
 
-    {
-        std::ofstream p(dir / "b_test.params");
-        p << "min_qty=abc\n";
-    }
-    r = Run(base + "--plugin-dir " + Quote(dir), tmp);
+    WriteFile(dir / "b_test.params", "min_qty=abc\n");
+    r = Run("check --plugin-dir " + Quote(dir), tmp);
     CHECK(r.code == 4 && Has(r.err, "nq_init failed"));
-    {
-        std::ofstream p(dir / "b_test.params");
-        p << "broken line\n";
-    }
-    r = Run(base + "--plugin-dir " + Quote(dir), tmp);
+    WriteFile(dir / "b_test.params", "broken line\n");
+    r = Run("check --plugin-dir " + Quote(dir), tmp);
     CHECK(r.code == 6 && Has(r.err, "expected key=value"));
     fs::remove(dir / "b_test.params");
 
-    r = Run(base + "--sampler bad", tmp);
+    r = Run("check --sampler bad", tmp);
     CHECK(r.code == 5);
-    r = Run(base + "--sampler a=time:1s --sampler a=time:2s", tmp);
-    CHECK(r.code == 5 && Has(r.err, "duplicate sampler name"));
+    r = Run("check --sampler a=time:1s --sampler a=time:2s", tmp);
+    CHECK(r.code == 5 && Has(r.err, "duplicate table name"));
 
     r = Run("check --plugin-dir " + Quote(tmp / "missing"), tmp);
     CHECK(r.code >= 100);
@@ -208,25 +184,12 @@ static int TestRunCli(const fs::path& tmp) {
     CHECK(Has(r.err, "feed  events=10 instruments=2 ts_regressions=0 instrument_unknown=0"));
     CHECK(Has(r.err, "adapter_status=0") && Has(r.err, "1      SYN1") && Has(r.err, "2      SYN2"));
     CHECK(Has(r.err, "wrote ") && fs::exists(out / "e.csv") && fs::exists(out / "t.csv"));
-    {
-        std::ifstream in(out / "e.csv");
-        std::string header, line;
-        std::getline(in, header);
-        CHECK(header == "instrument,symbol,ts,example_features.spread,example_features.mid,example_features.buy_vol,example_features.sell_vol,example_features.trades");
-        std::vector<std::string> rows;
-        while (std::getline(in, line)) rows.push_back(line);
-        CHECK(rows.size() == 4);
-        CHECK(rows[0].rfind("1,SYN1,5,", 0) == 0 && rows[1].rfind("1,SYN1,9,", 0) == 0);
-        CHECK(rows[2].rfind("2,SYN2,6,", 0) == 0 && rows[3].rfind("2,SYN2,10,", 0) == 0);
-    }
-    {
-        std::ifstream in(out / "t.csv");
-        std::string header, line;
-        std::getline(in, header);
-        std::vector<std::string> rows;
-        while (std::getline(in, line)) rows.push_back(line);
-        CHECK(rows.empty());
-    }
+    const auto e_csv = Lines(out / "e.csv");
+    CHECK(e_csv.size() == 5);
+    CHECK(e_csv[0] == "instrument,symbol,ts,example_features.spread,example_features.mid,example_features.buy_vol,example_features.sell_vol,example_features.trades");
+    CHECK(e_csv[1].rfind("1,SYN1,5,", 0) == 0 && e_csv[2].rfind("1,SYN1,9,", 0) == 0);
+    CHECK(e_csv[3].rfind("2,SYN2,6,", 0) == 0 && e_csv[4].rfind("2,SYN2,10,", 0) == 0);
+    CHECK(Lines(out / "t.csv").size() == 1);
 
     const fs::path pq = tmp / "pq";
     r = Run("run " + adapter + plugin + " --row-group 2 --out-dir " + Quote(pq), tmp);
@@ -252,7 +215,7 @@ static int TestRunCli(const fs::path& tmp) {
     const fs::path adir = tmp / "adapter";
     fs::create_directories(adir);
     fs::copy_file(NQ_SYNTHETIC_ADAPTER_PATH, adir / "synthetic.so", fs::copy_options::overwrite_existing);
-    { std::ofstream(adir / "synthetic.params") << "count=7\n"; }
+    WriteFile(adir / "synthetic.params", "count=7\n");
     r = Run("check-feed --adapter " + Quote(adir / "synthetic.so"), tmp);
     CHECK(r.code == 0 && Has(r.err, "events=7"));
     r = Run("check-feed --adapter " + Quote(adir / "synthetic.so") + " --adapter-param count=3", tmp);
@@ -287,14 +250,10 @@ static int TestOhlcvCli(const fs::path& tmp) {
     const fs::path csv = tmp / "ohlcv_csv";
     r = Run("run " + adapter + plugin + samplers + " --out-format csv --out-dir " + Quote(csv), tmp);
     CHECK(r.code == 0);
-    {
-        std::ifstream in(csv / "each.csv");
-        std::string header, line;
-        std::getline(in, header);
-        CHECK(header == "instrument,symbol,ts,example_ohlcv_features.close,example_ohlcv_features.range,example_ohlcv_features.volume,example_ohlcv_features.count");
-        std::getline(in, line);
-        CHECK(line == "1,SYN1,0,101,3,1,1");
-    }
+    const auto each_csv = Lines(csv / "each.csv");
+    CHECK(each_csv.size() >= 2);
+    CHECK(each_csv[0] == "instrument,symbol,ts,example_ohlcv_features.close,example_ohlcv_features.range,example_ohlcv_features.volume,example_ohlcv_features.count");
+    CHECK(each_csv[1] == "1,SYN1,0,101,3,1,1");
 
     r = Run("check" + plugin + samplers, tmp);
     CHECK(r.code == 0 && Has(r.out, "feed=OHLCV") && Has(r.out, "requires=none") && Has(r.out, "columns (4)"));

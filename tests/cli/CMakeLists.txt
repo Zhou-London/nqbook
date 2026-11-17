@@ -4,5 +4,4 @@ set_target_properties(nq_fake_plugin PROPERTIES PREFIX "" SUFFIX ".so" C_VISIBIL
 target_compile_options(nq_fake_plugin PRIVATE -Wall -Wextra -Wpedantic)
 
 nqhpc_add_test(cli_test cli_test.cpp)
-target_compile_definitions(cli_test PRIVATE NQ_FAKE_PLUGIN_PATH="$<TARGET_FILE:nq_fake_plugin>")
-add_dependencies(cli_test nq_fake_plugin)
+nqhpc_define_binary_path(cli_test PRIVATE NQ_FAKE_PLUGIN_PATH nq_fake_plugin)

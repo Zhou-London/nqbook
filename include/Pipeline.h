@@ -29,12 +29,11 @@ class Pipeline<nq_mbo> {
 public:
     Pipeline(const FeatureCatalog& catalog, Instrument spec, PipelineOptions<nq_mbo> options = {},
              RowSink* sink = nullptr)
-        : book_(options.expected_orders), view_(book_), engine_(catalog, std::move(spec), sink, &view_.View()) {}
+        : book_(options.expected_orders), view_(MakeBookView(book_)), engine_(catalog, std::move(spec), sink, &view_) {}
 
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;
 
-    Orderbook& Book() noexcept { return book_; }
     const Orderbook& Book() const noexcept { return book_; }
     FeatureEngine& Engine() noexcept { return engine_; }
     const FeatureEngine& Engine() const noexcept { return engine_; }
@@ -45,7 +44,7 @@ public:
 
 private:
     Orderbook book_;
-    OrderbookView view_;
+    nq_book_view view_;
     FeatureEngine engine_;
 };
 

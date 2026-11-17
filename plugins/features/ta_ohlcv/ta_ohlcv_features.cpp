@@ -33,6 +33,10 @@ inline double Position(double x, double low, double high) noexcept {
     return high == low ? 0.5 : kNaN;
 }
 
+inline double Share(double part, double total, double when_empty) noexcept {
+    return total > 0.0 ? 100.0 * part / total : when_empty;
+}
+
 class SmoothedAverage {
 public:
     static SmoothedAverage Wilder(std::int64_t period) { return {period, 1.0 / static_cast<double>(period)}; }
@@ -85,6 +89,61 @@ private:
     std::deque<Entry> window_;
 };
 
+class DirectionalIndex {
+public:
+    explicit DirectionalIndex(std::int64_t period) : plus_(SmoothedAverage::Wilder(period)), minus_(plus_), adx_(plus_) {}
+
+    void Add(double up, double down) noexcept {
+        plus_.Add(up > down && up > 0.0 ? up : 0.0);
+        minus_.Add(down > up && down > 0.0 ? down : 0.0);
+        if (!plus_.Ready()) return;
+        const double plus = plus_.Value();
+        const double minus = minus_.Value();
+        adx_.Add(Share(std::fabs(plus - minus), plus + minus, 0.0));
+    }
+
+    double Value() const noexcept { return adx_.Value(); }
+
+private:
+    SmoothedAverage plus_;
+    SmoothedAverage minus_;
+    SmoothedAverage adx_;
+};
+
+class RelativeStrength {
+public:
+    explicit RelativeStrength(std::int64_t period) : gain_(SmoothedAverage::Wilder(period)), loss_(gain_) {}
+
+    void Add(double change) noexcept {
+        gain_.Add(std::max(change, 0.0));
+        loss_.Add(std::max(-change, 0.0));
+    }
+
+    double Value() const noexcept {
+        return gain_.Ready() ? Share(gain_.Value(), gain_.Value() + loss_.Value(), 50.0) : kNaN;
+    }
+
+private:
+    SmoothedAverage gain_;
+    SmoothedAverage loss_;
+};
+
+class DonchianChannel {
+public:
+    explicit DonchianChannel(std::int64_t period) : highest_(period), lowest_(period) {}
+
+    void Add(double high, double low) {
+        highest_.Add(high);
+        lowest_.Add(low);
+    }
+
+    double PositionOf(double close) const noexcept { return Position(close, lowest_.Value(), highest_.Value()); }
+
+private:
+    RollingExtreme<std::greater<double>> highest_;
+    RollingExtreme<std::less<double>> lowest_;
+};
+
 class RelativeVolume {
 public:
     explicit RelativeVolume(std::int64_t days) : days_(days), history_(static_cast<std::size_t>(kHoursPerDay * days), 0.0) {}
@@ -112,38 +171,9 @@ private:
     std::array<Slot, kHoursPerDay> slots_{};
 };
 
-inline constexpr std::size_t kSeries = 12;
-
-inline constexpr auto kCrossColumns = nq::MakeColumns({
-    {"natr_rank", "rank", "rank of natr across the instruments at the boundary, 0 to 1"},
-    {"natr_z", "sd", "z-score of natr across the instruments at the boundary, 0 when all are equal"},
-    {"ema_dev_rank", "rank", "rank of ema_dev across the instruments at the boundary, 0 to 1"},
-    {"ema_dev_z", "sd", "z-score of ema_dev across the instruments at the boundary, 0 when all are equal"},
-    {"adx_rank", "rank", "rank of adx across the instruments at the boundary, 0 to 1"},
-    {"adx_z", "sd", "z-score of adx across the instruments at the boundary, 0 when all are equal"},
-    {"donchian_pos_rank", "rank", "rank of donchian_pos across the instruments at the boundary, 0 to 1"},
-    {"donchian_pos_z", "sd", "z-score of donchian_pos across the instruments at the boundary, 0 when all are equal"},
-    {"rsi_rank", "rank", "rank of rsi across the instruments at the boundary, 0 to 1"},
-    {"rsi_z", "sd", "z-score of rsi across the instruments at the boundary, 0 when all are equal"},
-    {"clv_rank", "rank", "rank of clv across the instruments at the boundary, 0 to 1"},
-    {"clv_z", "sd", "z-score of clv across the instruments at the boundary, 0 when all are equal"},
-    {"range_atr_rank", "rank", "rank of range_atr across the instruments at the boundary, 0 to 1"},
-    {"range_atr_z", "sd", "z-score of range_atr across the instruments at the boundary, 0 when all are equal"},
-    {"rvol_rank", "rank", "rank of rvol across the instruments at the boundary, 0 to 1"},
-    {"rvol_z", "sd", "z-score of rvol across the instruments at the boundary, 0 when all are equal"},
-});
-
-template <std::size_t A, std::size_t B>
-constexpr std::array<nq::Column, A + B> Join(const std::array<nq::Column, A>& a, const std::array<nq::Column, B>& b) {
-    std::array<nq::Column, A + B> out{};
-    std::copy(a.begin(), a.end(), out.begin());
-    std::copy(b.begin(), b.end(), out.begin() + A);
-    return out;
-}
-
 class TechnicalAnalysis : public nq::FeatureBase {
 public:
-    static constexpr auto kColumns = Join(nq::MakeColumns({
+    static constexpr auto kColumns = nq::MakeColumns({
         {"ret", "log", "close-to-close log return", nq::kCumulative},
         {"gap", "log", "log return from the previous close to the open", nq::kCumulative},
         {"rv", "var", "squared close-to-close log return", nq::kCumulative},
@@ -156,7 +186,7 @@ public:
         {"clv", "ratio", "position of close between low and high of the last record, 0 to 1"},
         {"range_atr", "atr", "true range of the last record over the average true range before it"},
         {"rvol", "ratio", "volume over the mean volume of the same Eastern hour on earlier days"},
-    }), kCrossColumns);
+    });
 
     static constexpr int kRthFirstHour = 9;
     static constexpr int kRthLastHour = 15;
@@ -167,13 +197,9 @@ public:
           rth_only_(p.GetBool("rth_only", false)),
           atr_(SmoothedAverage::Wilder(Period(p, "atr", 14))),
           ema_(SmoothedAverage::Exponential(Period(p, "ema", 20))),
-          plus_dm_(SmoothedAverage::Wilder(Period(p, "adx", 14))),
-          minus_dm_(plus_dm_),
-          adx_(plus_dm_),
-          gain_(SmoothedAverage::Wilder(Period(p, "rsi", 6))),
-          loss_(gain_),
-          highest_(Period(p, "donchian", 20)),
-          lowest_(Period(p, "donchian", 20)),
+          adx_(Period(p, "adx", 14)),
+          rsi_(Period(p, "rsi", 6)),
+          donchian_(Period(p, "donchian", 20)),
           volume_(Period(p, "rvol_days", 20)) {}
 
     void OnOhlcv(const nq::Ohlcv& ohlcv) noexcept {
@@ -192,9 +218,8 @@ public:
             gap_ += std::log(open / close_);
             rv_ += ret * ret;
             true_range = std::max(high, close_) - std::min(low, close_);
-            AddDirectionalMove(high - high_, low_ - low);
-            gain_.Add(std::max(close - close_, 0.0));
-            loss_.Add(std::max(close_ - close, 0.0));
+            adx_.Add(high - high_, low_ - low);
+            rsi_.Add(close - close_);
         }
         const double log_range = std::log(high / low);
         const double log_body = std::log(close / open);
@@ -203,8 +228,7 @@ public:
         range_atr_ = true_range / atr_.Value();
         atr_.Add(true_range);
         ema_.Add(close);
-        highest_.Add(high);
-        lowest_.Add(low);
+        donchian_.Add(high, low);
         clv_ = Position(close, low, high);
         rvol_ = volume_.Add(hour, ohlcv.volume);
         high_ = high;
@@ -220,15 +244,12 @@ public:
         out[4] = atr_.Value() / close_;
         out[5] = (close_ - ema_.Value()) / atr_.Value();
         out[6] = adx_.Value();
-        out[7] = Position(close_, lowest_.Value(), highest_.Value());
-        out[8] = gain_.Ready() ? Share(gain_.Value(), gain_.Value() + loss_.Value(), 50.0) : kNaN;
+        out[7] = donchian_.PositionOf(close_);
+        out[8] = rsi_.Value();
         out[9] = clv_;
         out[10] = range_atr_;
         out[11] = rvol_;
-        for (std::size_t c = 0; c < kCrossColumns.size(); ++c) out[kSeries + c] = cross_ ? cross_[c] : kNaN;
     }
-
-    void BindCross(nq::CrossRow row) noexcept { cross_ = row; }
 
 private:
     static std::int64_t Period(const nq::Params& p, const char* key, std::int64_t fallback) {
@@ -237,31 +258,13 @@ private:
         return period;
     }
 
-    static double Share(double part, double total, double when_empty) noexcept {
-        return total > 0.0 ? 100.0 * part / total : when_empty;
-    }
-
-    void AddDirectionalMove(double up, double down) noexcept {
-        plus_dm_.Add(up > down && up > 0.0 ? up : 0.0);
-        minus_dm_.Add(down > up && down > 0.0 ? down : 0.0);
-        if (!plus_dm_.Ready()) return;
-        const double plus = plus_dm_.Value();
-        const double minus = minus_dm_.Value();
-        adx_.Add(Share(std::fabs(plus - minus), plus + minus, 0.0));
-    }
-
     double scale_;
     bool rth_only_;
-    nq::CrossRow cross_;
     SmoothedAverage atr_;
     SmoothedAverage ema_;
-    SmoothedAverage plus_dm_;
-    SmoothedAverage minus_dm_;
-    SmoothedAverage adx_;
-    SmoothedAverage gain_;
-    SmoothedAverage loss_;
-    RollingExtreme<std::greater<double>> highest_;
-    RollingExtreme<std::less<double>> lowest_;
+    DirectionalIndex adx_;
+    RelativeStrength rsi_;
+    DonchianChannel donchian_;
     RelativeVolume volume_;
     double high_ = kNaN;
     double low_ = kNaN;
@@ -279,7 +282,26 @@ class TechnicalCross {
 public:
     static constexpr auto kInputs =
         nq::MakeInputs({"natr", "ema_dev", "adx", "donchian_pos", "rsi", "clv", "range_atr", "rvol"});
-    static constexpr auto kColumns = kCrossColumns;
+    static constexpr auto kColumns = nq::MakeColumns({
+        {"natr_rank", "rank", "rank of natr across the instruments at the boundary, 0 to 1"},
+        {"natr_z", "sd", "z-score of natr across the instruments at the boundary, 0 when all are equal"},
+        {"ema_dev_rank", "rank", "rank of ema_dev across the instruments at the boundary, 0 to 1"},
+        {"ema_dev_z", "sd", "z-score of ema_dev across the instruments at the boundary, 0 when all are equal"},
+        {"adx_rank", "rank", "rank of adx across the instruments at the boundary, 0 to 1"},
+        {"adx_z", "sd", "z-score of adx across the instruments at the boundary, 0 when all are equal"},
+        {"donchian_pos_rank", "rank", "rank of donchian_pos across the instruments at the boundary, 0 to 1"},
+        {"donchian_pos_z", "sd", "z-score of donchian_pos across the instruments at the boundary, 0 when all are equal"},
+        {"rsi_rank", "rank", "rank of rsi across the instruments at the boundary, 0 to 1"},
+        {"rsi_z", "sd", "z-score of rsi across the instruments at the boundary, 0 when all are equal"},
+        {"clv_rank", "rank", "rank of clv across the instruments at the boundary, 0 to 1"},
+        {"clv_z", "sd", "z-score of clv across the instruments at the boundary, 0 when all are equal"},
+        {"range_atr_rank", "rank", "rank of range_atr across the instruments at the boundary, 0 to 1"},
+        {"range_atr_z", "sd", "z-score of range_atr across the instruments at the boundary, 0 when all are equal"},
+        {"rvol_rank", "rank", "rank of rvol across the instruments at the boundary, 0 to 1"},
+        {"rvol_z", "sd", "z-score of rvol across the instruments at the boundary, 0 when all are equal"},
+    });
+    static constexpr std::size_t kColumnsPerInput = 2;
+    static_assert(kColumns.size() == kColumnsPerInput * kInputs.size());
 
     explicit TechnicalCross(const nq::Params& p) : min_members_(p.GetInt("cross_min", 20)) {
         if (min_members_ < 2) throw std::invalid_argument("cross_min must be at least 2");
@@ -296,7 +318,7 @@ public:
                 if (std::isfinite(in[row])) entries_.push_back({in[row], row});
             }
             if (static_cast<std::int64_t>(entries_.size()) >= min_members_) {
-                Write(view.Out(2 * s), view.Out(2 * s + 1));
+                Write(view.Out(RankColumn(s)), view.Out(ZColumn(s)));
             }
         }
     }
@@ -306,6 +328,9 @@ private:
         double value;
         std::uint32_t row;
     };
+
+    static constexpr std::size_t RankColumn(std::size_t input) noexcept { return kColumnsPerInput * input; }
+    static constexpr std::size_t ZColumn(std::size_t input) noexcept { return kColumnsPerInput * input + 1; }
 
     void Write(std::span<double> rank, std::span<double> z) noexcept {
         const std::size_t n = entries_.size();
@@ -333,7 +358,23 @@ private:
     std::vector<Entry> entries_;
 };
 
+class CrossReadback : public nq::FeatureBase {
+public:
+    static constexpr auto kColumns = TechnicalCross::kColumns;
+
+    explicit CrossReadback(const nq::Params&) {}
+
+    void BindCross(nq::CrossRow row) noexcept { cross_ = row; }
+
+    void Read(std::span<double> out) const noexcept {
+        for (std::size_t c = 0; c < kColumns.size(); ++c) out[c] = cross_ ? cross_[c] : kNaN;
+    }
+
+private:
+    nq::CrossRow cross_;
+};
+
 }  // namespace nq_ta
 
-NQ_OHLCV_PLUGIN(nq_ta::TechnicalAnalysis)
+NQ_OHLCV_PLUGIN(nq_ta::TechnicalAnalysis, nq_ta::CrossReadback)
 NQ_CROSS(nq_ta::TechnicalCross)

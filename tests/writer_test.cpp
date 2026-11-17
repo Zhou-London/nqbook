@@ -3,68 +3,28 @@
 #include <fstream>
 #include <memory>
 #include <stdexcept>
-#include <string>
 #include <thread>
 #include <vector>
-
-#include <arrow/api.h>
-#include <arrow/io/file.h>
-#include <parquet/arrow/reader.h>
 
 #include <Feature/FeatureCatalog.h>
 #include <Writer/ParquetWriter.h>
 #include <Writer/WriterEngine.h>
 
+#include "parquet_support.hpp"
 #include "support.hpp"
 
 namespace fs = std::filesystem;
 using namespace nqtest;
 
-struct Parquet {
-    std::shared_ptr<arrow::Table> table;
-    int row_groups = 0;
-};
-
-static Parquet Read(const fs::path& path) {
-    auto file = arrow::io::ReadableFile::Open(path.string()).ValueOrDie();
-    auto reader = parquet::arrow::OpenFile(file, arrow::default_memory_pool()).ValueOrDie();
-    Parquet out;
-    out.row_groups = reader->parquet_reader()->metadata()->num_row_groups();
-    out.table = reader->ReadTable().ValueOrDie();
-    return out;
-}
-
-static double DoubleAt(const arrow::Table& t, const std::string& column, std::int64_t row) {
-    const auto chunked = t.GetColumnByName(column);
-    const auto scalar = chunked->GetScalar(row).ValueOrDie();
-    return std::static_pointer_cast<arrow::DoubleScalar>(scalar)->value;
-}
-
-static std::int64_t Int64At(const arrow::Table& t, const std::string& column, std::int64_t row) {
-    const auto scalar = t.GetColumnByName(column)->GetScalar(row).ValueOrDie();
-    if (scalar->type->id() == arrow::Type::UINT32) return std::static_pointer_cast<arrow::UInt32Scalar>(scalar)->value;
-    return std::static_pointer_cast<arrow::Int64Scalar>(scalar)->value;
-}
-
-static std::int32_t DayAt(const arrow::Table& t, std::int64_t row) {
-    const auto scalar = t.GetColumnByName("date")->GetScalar(row).ValueOrDie();
-    return std::static_pointer_cast<arrow::Date32Scalar>(scalar)->value;
-}
-
-static std::string StringAt(const arrow::Table& t, const std::string& column, std::int64_t row) {
-    const auto scalar = t.GetColumnByName(column)->GetScalar(row).ValueOrDie();
-    return std::static_pointer_cast<arrow::StringScalar>(scalar)->ToString();
-}
-
-static nq::FeatureRow Row(std::uint32_t sampler, std::uint32_t instrument, std::int64_t ts, std::vector<double> values) {
-    return nq::FeatureRow{sampler, instrument, ts, std::move(values)};
+static nq::FeatureBlock Row(std::uint32_t table, std::uint32_t instrument, std::int64_t ts, std::vector<double> values) {
+    return nq::FeatureBlock{table, ts, {instrument}, std::move(values)};
 }
 
 static int TestParquetWriter(const nq::FeatureCatalog& catalog, const fs::path& tmp) {
     const fs::path dir = tmp / "direct";
     {
         nq::ParquetWriter w(catalog, dir, nq::ParquetOptions{3});
-        CHECK(w.SamplerCount() == 2 && w.Path(0).filename() == "1s.parquet" && w.Path(1).filename() == "t.parquet");
+        CHECK(w.TableCount() == 2 && w.Path(0).filename() == "1s.parquet" && w.Path(1).filename() == "t.parquet");
         w.Register(nq::Instrument{2, "BBB", 5, 100});
         w.Register(nq::Instrument{1, "AAA", 10, 1});
         for (int i = 0; i < 7; ++i) {
@@ -73,27 +33,17 @@ static int TestParquetWriter(const nq::FeatureCatalog& catalog, const fs::path& 
         w.Write(Row(1, 1, 86400 * kSec - 1, {1.0}));
         w.Write(Row(1, 2, 86400 * kSec, {2.0}));
 
-        bool threw = false;
-        try { w.Write(Row(1, 1, 7, {1.0, 2.0})); } catch (const std::invalid_argument&) { threw = true; }
-        CHECK(threw);
-        threw = false;
-        try { w.Write(Row(5, 1, 7, {1.0})); } catch (const std::out_of_range&) { threw = true; }
-        CHECK(threw);
-        threw = false;
-        try { w.Write(Row(1, 3, 7, {1.0})); } catch (const std::invalid_argument&) { threw = true; }
-        CHECK(threw);
-        threw = false;
-        try { w.Register(nq::Instrument{1, "CCC", 1, 1}); } catch (const std::invalid_argument&) { threw = true; }
-        CHECK(threw);
+        CHECK(Throws<std::invalid_argument>([&] { w.Write(Row(1, 1, 7, {1.0, 2.0})); }));
+        CHECK(Throws<std::out_of_range>([&] { w.Write(Row(5, 1, 7, {1.0})); }));
+        CHECK(Throws<std::invalid_argument>([&] { w.Write(Row(1, 3, 7, {1.0})); }));
+        CHECK(Throws<std::invalid_argument>([&] { w.Register(nq::Instrument{1, "CCC", 1, 1}); }));
 
         w.Close();
         CHECK(w.Rows(0) == 7 && w.Rows(1) == 2 && w.Files().size() == 3);
-        threw = false;
-        try { w.Write(Row(0, 1, 9, {0, 0, 0, 0, 0})); } catch (const std::logic_error&) { threw = true; }
-        CHECK(threw);
+        CHECK(Throws<std::logic_error>([&] { w.Write(Row(0, 1, 9, {0, 0, 0, 0, 0})); }));
     }
 
-    const Parquet bars = Read(dir / "1s.parquet");
+    const ParquetFile bars = ReadParquet(dir / "1s.parquet");
     CHECK(bars.table->num_rows() == 7 && bars.table->num_columns() == 9 && bars.row_groups == 3);
     CHECK(bars.table->schema()->field(0)->name() == "instrument" && bars.table->schema()->field(1)->name() == "symbol");
     CHECK(bars.table->schema()->field(2)->name() == "ts");
@@ -101,36 +51,30 @@ static int TestParquetWriter(const nq::FeatureCatalog& catalog, const fs::path& 
     CHECK(bars.table->schema()->field(4)->name() == "example_features.spread");
     CHECK(bars.table->schema()->field(2)->type()->ToString() == "int64");
     CHECK(bars.table->schema()->field(3)->type()->ToString() == "date32[day]");
-    CHECK(Int64At(*bars.table, "instrument", 0) == 1 && Int64At(*bars.table, "instrument", 1) == 2);
+    CHECK(ValueAt<arrow::UInt32Scalar>(*bars.table, "instrument", 0) == 1 && ValueAt<arrow::UInt32Scalar>(*bars.table, "instrument", 1) == 2);
     CHECK(StringAt(*bars.table, "symbol", 0) == "AAA" && StringAt(*bars.table, "symbol", 1) == "BBB");
-    CHECK(Int64At(*bars.table, "ts", 2) == 3 * kSec && DayAt(*bars.table, 2) == 0);
-    CHECK(Near(DoubleAt(*bars.table, "example_features.spread", 6), 6.2));
-    CHECK(Near(DoubleAt(*bars.table, "example_features.buy_vol", 3), 3.0));
+    CHECK(ValueAt<arrow::Int64Scalar>(*bars.table, "ts", 2) == 3 * kSec && ValueAt<arrow::Date32Scalar>(*bars.table, "date", 2) == 0);
+    CHECK(Near(ValueAt<arrow::DoubleScalar>(*bars.table, "example_features.spread", 6), 6.2));
+    CHECK(Near(ValueAt<arrow::DoubleScalar>(*bars.table, "example_features.buy_vol", 3), 3.0));
 
-    const Parquet trades = Read(dir / "t.parquet");
+    const ParquetFile trades = ReadParquet(dir / "t.parquet");
     CHECK(trades.table->num_rows() == 2 && trades.table->num_columns() == 5 && trades.row_groups == 1);
     CHECK(trades.table->schema()->field(4)->name() == "example_features.trades");
     CHECK(StringAt(*trades.table, "symbol", 1) == "BBB");
-    CHECK(Int64At(*trades.table, "ts", 0) == 86400 * kSec - 1 && DayAt(*trades.table, 0) == 0);
-    CHECK(Int64At(*trades.table, "ts", 1) == 86400 * kSec && DayAt(*trades.table, 1) == 1);
-    CHECK(Near(DoubleAt(*trades.table, "example_features.trades", 1), 2.0));
+    CHECK(ValueAt<arrow::Int64Scalar>(*trades.table, "ts", 0) == 86400 * kSec - 1 && ValueAt<arrow::Date32Scalar>(*trades.table, "date", 0) == 0);
+    CHECK(ValueAt<arrow::Int64Scalar>(*trades.table, "ts", 1) == 86400 * kSec && ValueAt<arrow::Date32Scalar>(*trades.table, "date", 1) == 1);
+    CHECK(Near(ValueAt<arrow::DoubleScalar>(*trades.table, "example_features.trades", 1), 2.0));
 
-    const Parquet inst = Read(dir / "instruments.parquet");
+    const ParquetFile inst = ReadParquet(dir / "instruments.parquet");
     CHECK(inst.table->num_rows() == 2 && inst.table->num_columns() == 4);
-    CHECK(Int64At(*inst.table, "instrument", 0) == 1 && StringAt(*inst.table, "symbol", 0) == "AAA");
-    CHECK(StringAt(*inst.table, "symbol", 1) == "BBB" && Int64At(*inst.table, "lot_size", 1) == 100);
+    CHECK(ValueAt<arrow::UInt32Scalar>(*inst.table, "instrument", 0) == 1 && StringAt(*inst.table, "symbol", 0) == "AAA");
+    CHECK(StringAt(*inst.table, "symbol", 1) == "BBB" && ValueAt<arrow::Int64Scalar>(*inst.table, "lot_size", 1) == 100);
 
-    bool threw = false;
-    try {
+    CHECK(Throws<std::exception>([&] {
         std::ofstream(tmp / "not_a_dir") << "x";
         nq::ParquetWriter bad(catalog, tmp / "not_a_dir" / "sub");
-    } catch (const std::exception&) {
-        threw = true;
-    }
-    CHECK(threw);
-    threw = false;
-    try { nq::ParquetWriter bad(catalog, tmp / "zero", nq::ParquetOptions{0}); } catch (const std::invalid_argument&) { threw = true; }
-    CHECK(threw);
+    }));
+    CHECK(Throws<std::invalid_argument>([&] { nq::ParquetWriter bad(catalog, tmp / "zero", nq::ParquetOptions{0}); }));
     return 0;
 }
 
@@ -138,24 +82,22 @@ static int TestWriterEngine(const nq::FeatureCatalog& catalog, const fs::path& t
     const fs::path dir = tmp / "engine";
     {
         nq::WriterEngine engine(std::make_unique<nq::ParquetWriter>(catalog, dir, nq::ParquetOptions{100}), 4);
-        engine.Start();
         engine.Register(nq::Instrument{1, "AAA", 10, 1});
         engine.Register(nq::Instrument{2, "BBB", 5, 100});
         for (int i = 0; i < 1000; ++i) {
             engine.Push(Row(0, 1, kSec * i, {1.0, 2.0, double(i), 0.0, 0.0}));
             if (i % 10 == 0) engine.Push(Row(1, 2, kSec * i, {double(i)}));
         }
-        engine.Finish();
-        CHECK(!engine.Failed() && engine.Error().empty());
-        CHECK(engine.Pushed() == 1100 && engine.Written() == 1100);
+        CHECK(engine.Finish().empty());
+        CHECK(engine.Written() == 1100);
         CHECK(engine.Writer().Rows(0) == 1000 && engine.Writer().Rows(1) == 100 && engine.Writer().Closed());
     }
-    const Parquet bars = Read(dir / "1s.parquet");
+    const ParquetFile bars = ReadParquet(dir / "1s.parquet");
     CHECK(bars.table->num_rows() == 1000 && bars.row_groups == 10);
-    CHECK(Near(DoubleAt(*bars.table, "example_features.buy_vol", 999), 999.0));
+    CHECK(Near(ValueAt<arrow::DoubleScalar>(*bars.table, "example_features.buy_vol", 999), 999.0));
     CHECK(StringAt(*bars.table, "symbol", 999) == "AAA");
-    CHECK(Read(dir / "t.parquet").table->num_rows() == 100);
-    CHECK(Read(dir / "instruments.parquet").table->num_rows() == 2);
+    CHECK(ReadParquet(dir / "t.parquet").table->num_rows() == 100);
+    CHECK(ReadParquet(dir / "instruments.parquet").table->num_rows() == 2);
     return 0;
 }
 
@@ -163,7 +105,6 @@ static int TestWriterEngineLastRow(const nq::FeatureCatalog& catalog, const fs::
     const fs::path dir = tmp / "last_row";
     for (int i = 0; i < 2000; ++i) {
         nq::WriterEngine engine(std::make_unique<nq::ParquetWriter>(catalog, dir, nq::ParquetOptions{100}), 4);
-        engine.Start();
         for (int spin = 0; spin < i % 64; ++spin) std::this_thread::yield();
         engine.Register(nq::Instrument{1, "AAA", 10, 1});
         engine.Push(Row(0, 1, kSec, {1.0, 2.0, 3.0, 0.0, 0.0}));

@@ -1,10 +1,10 @@
 #include <Config.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <charconv>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 
 namespace nq {
@@ -27,63 +27,25 @@ std::int64_t ParseCount(std::string_view text, std::string_view what) {
     return value;
 }
 
-}  // namespace
+struct KeyValueView {
+    std::string_view key;
+    std::string_view value;
+};
 
-std::int64_t ParseDuration(std::string_view text) {
-    std::size_t i = 0;
-    while (i < text.size() && text[i] >= '0' && text[i] <= '9') ++i;
-    if (i == 0) throw std::invalid_argument("duration must start with digits: '" + std::string(text) + "'");
-    
-    std::int64_t value = 0;
-    const std::errc ec = std::from_chars(text.data(), text.data() + i, value).ec;
-    
-    const std::string_view unit = text.substr(i);
-    std::int64_t scale = 0;
-    if (unit == "ns") scale = 1;
-    else if (unit == "us") scale = 1'000;
-    else if (unit == "ms") scale = 1'000'000;
-    else if (unit == "s") scale = 1'000'000'000;
-    else if (unit == "m") scale = 60'000'000'000;
-    else if (unit == "h") scale = 3'600'000'000'000;
-    else throw std::invalid_argument("duration needs a unit (ns, us, ms, s, m, h): '" + std::string(text) + "'");
-    
-    if (ec == std::errc::result_out_of_range || value > std::numeric_limits<std::int64_t>::max() / scale) {
-        throw std::invalid_argument("duration is too large: '" + std::string(text) + "'");
-    }
-    if (value <= 0) throw std::invalid_argument("duration must be positive: '" + std::string(text) + "'");
-    
-    return value * scale;
-}
-
-SamplerSpec ParseSamplerSpec(std::string_view text) {
+std::optional<KeyValueView> SplitKeyValue(std::string_view text) {
     const auto eq = text.find('=');
-    if (eq == std::string_view::npos || eq == 0) {
-        throw std::invalid_argument("sampler must be NAME=TRIGGER:EVERY: '" + std::string(text) + "'");
-    }
-    const std::string name(text.substr(0, eq));
-    const std::string_view rest = text.substr(eq + 1);
-    const auto colon = rest.find(':');
-    if (colon == std::string_view::npos || colon == 0 || colon + 1 == rest.size()) {
-        throw std::invalid_argument("sampler must be NAME=TRIGGER:EVERY: '" + std::string(text) + "'");
-    }
-    const std::string_view trigger = rest.substr(0, colon);
-    const std::string_view every = rest.substr(colon + 1);
-    if (trigger == "time") return SamplerSpec::Time(name, ParseDuration(every));
-    if (trigger == "events") return SamplerSpec::Events(name, ParseCount(every, "events count"));
-    if (trigger == "trades") return SamplerSpec::Trades(name, ParseCount(every, "trades count"));
-    throw std::invalid_argument("sampler trigger must be time, events, or trades: '" + std::string(trigger) + "'");
+    if (eq == std::string_view::npos || eq == 0) return std::nullopt;
+    return KeyValueView{text.substr(0, eq), text.substr(eq + 1)};
 }
 
-CrossArg ParseCrossArg(std::string_view text) {
-    const auto eq = text.find('=');
-    const auto colon = text.rfind(':');
-    if (eq == std::string_view::npos || eq == 0 || colon == std::string_view::npos || colon <= eq + 1 ||
-        colon + 1 == text.size()) {
-        throw std::invalid_argument("cross must be NAME=PLUGIN:EVERY: '" + std::string(text) + "'");
-    }
-    return CrossArg{std::string(text.substr(0, eq)), std::string(text.substr(eq + 1, colon - eq - 1)),
-                    ParseDuration(text.substr(colon + 1))};
-}
+struct DurationUnit {
+    std::string_view suffix;
+    std::int64_t nanoseconds;
+};
+
+constexpr DurationUnit kDurationUnits[] = {
+    {"ns", 1}, {"us", 1'000}, {"ms", 1'000'000}, {"s", 1'000'000'000}, {"m", 60'000'000'000}, {"h", 3'600'000'000'000},
+};
 
 KeyValues LoadParamsFile(const std::filesystem::path& path) {
     std::ifstream in(path);
@@ -97,14 +59,57 @@ KeyValues LoadParamsFile(const std::filesystem::path& path) {
         const std::string_view t = Trim(line);
         if (t.empty() || t.front() == '#') continue;
         
-        const auto eq = t.find('=');
-        if (eq == std::string_view::npos || eq == 0) {
-            throw std::invalid_argument(path.string() + ":" + std::to_string(lineno) + ": expected key=value");
-        }
+        const auto kv = SplitKeyValue(t);
+        if (!kv) throw std::invalid_argument(path.string() + ":" + std::to_string(lineno) + ": expected key=value");
         
-        out.emplace_back(std::string(Trim(t.substr(0, eq))), std::string(Trim(t.substr(eq + 1))));
+        out.emplace_back(std::string(Trim(kv->key)), std::string(Trim(kv->value)));
     }
     return out;
+}
+
+}  // namespace
+
+std::int64_t ParseDuration(std::string_view text) {
+    const char* const last = text.data() + text.size();
+    std::int64_t value = 0;
+    const auto [digits_end, ec] = std::from_chars(text.data(), last, value);
+    if (ec == std::errc::invalid_argument || (ec == std::errc{} && value <= 0)) {
+        throw std::invalid_argument("duration must start with a positive integer: '" + std::string(text) + "'");
+    }
+
+    const auto unit = std::ranges::find(kDurationUnits, std::string_view(digits_end, last), &DurationUnit::suffix);
+    if (unit == std::end(kDurationUnits)) {
+        throw std::invalid_argument("duration needs a unit (ns, us, ms, s, m, h): '" + std::string(text) + "'");
+    }
+    if (ec == std::errc::result_out_of_range || value > std::numeric_limits<std::int64_t>::max() / unit->nanoseconds) {
+        throw std::invalid_argument("duration is too large: '" + std::string(text) + "'");
+    }
+    return value * unit->nanoseconds;
+}
+
+SamplerSpec ParseSamplerSpec(std::string_view text, bool fill_gaps) {
+    const auto named = SplitKeyValue(text);
+    const auto colon = named ? named->value.find(':') : std::string_view::npos;
+    if (colon == std::string_view::npos || colon == 0 || colon + 1 == named->value.size()) {
+        throw std::invalid_argument("sampler must be NAME=TRIGGER:EVERY: '" + std::string(text) + "'");
+    }
+    const std::string name(named->key);
+    const std::string_view trigger = named->value.substr(0, colon);
+    const std::string_view every = named->value.substr(colon + 1);
+    if (trigger == "time") return SamplerSpec::Time(name, ParseDuration(every), fill_gaps);
+    if (trigger == "events") return SamplerSpec::Events(name, ParseCount(every, "events count"));
+    if (trigger == "trades") return SamplerSpec::Trades(name, ParseCount(every, "trades count"));
+    throw std::invalid_argument("sampler trigger must be time, events, or trades: '" + std::string(trigger) + "'");
+}
+
+CrossArg ParseCrossArg(std::string_view text) {
+    const auto named = SplitKeyValue(text);
+    const auto colon = named ? named->value.rfind(':') : std::string_view::npos;
+    if (colon == std::string_view::npos || colon == 0 || colon + 1 == named->value.size()) {
+        throw std::invalid_argument("cross must be NAME=PLUGIN:EVERY: '" + std::string(text) + "'");
+    }
+    return CrossArg{std::string(named->key), std::string(named->value.substr(0, colon)),
+                    ParseDuration(named->value.substr(colon + 1))};
 }
 
 PluginFile DescribePluginFile(const std::filesystem::path& so) {
@@ -129,6 +134,16 @@ std::vector<PluginFile> ScanPluginDir(const std::filesystem::path& dir) {
     out.reserve(files.size());
     for (const auto& f : files) out.push_back(DescribePluginFile(f));
     
+    return out;
+}
+
+KeyValues AdapterParams(const std::filesystem::path& adapter, std::span<const std::string> overrides) {
+    KeyValues out = DescribePluginFile(adapter).params;
+    for (const std::string& text : overrides) {
+        const auto kv = SplitKeyValue(text);
+        if (!kv) throw std::invalid_argument("--adapter-param expects KEY=VALUE: '" + text + "'");
+        out.emplace_back(kv->key, kv->value);
+    }
     return out;
 }
 

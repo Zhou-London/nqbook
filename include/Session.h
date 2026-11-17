@@ -18,15 +18,18 @@
 
 namespace nq {
 
+struct WriterResult {
+    std::uint64_t rows = 0;
+    std::uint64_t stalls = 0;
+    std::string error;
+};
+
 struct RunResult {
     bool interrupted = false;
     int adapter_status = 0;
     std::uint64_t consumed = 0;
     std::uint64_t stalls = 0;
-    bool has_writer = false;
-    std::uint64_t rows_written = 0;
-    std::uint64_t writer_stalls = 0;
-    std::string writer_error;
+    std::optional<WriterResult> writer;
 };
 
 template <class Record>
@@ -35,19 +38,16 @@ public:
     /* ---------- CTR/DTRs ---------- */
     Session(const FeatureCatalog& catalog, const host::AdapterPlugin& adapter, const nq_params& adapter_params,
             std::unique_ptr<ParquetWriter> writer = nullptr,
-            std::size_t queue_capacity = defaults::kQueueCapacity,
-            PipelineOptions<Record> options = {});
+            std::size_t queue_capacity = defaults::kQueueCapacity);
 
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
 
     /* ---------- Member Functions ---------- */
-    RunResult Run(const std::atomic<bool>& stop, std::size_t batch = defaults::kConsumeBatch);
+    RunResult Run(const std::atomic<bool>& stop);
 
     /* ---------- Getters ---------- */
-    PipelineTable<Record>& Pipelines() noexcept { return table_; }
     const PipelineTable<Record>& Pipelines() const noexcept { return table_; }
-    const AdapterEngine<Record>& Adapter() const noexcept { return adapter_; }
     const WriterEngine* Writer() const noexcept { return writer_ ? &*writer_ : nullptr; }
 
 private:

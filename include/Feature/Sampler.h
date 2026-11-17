@@ -10,36 +10,37 @@
 
 #include <nq/feature_abi.h>
 
-#include <Defaults.h>
-
 #include <Feature/RowBuffer.h>
 #include <Feature/Trigger.h>
 #include <Writer/RowSink.h>
 
 namespace nq {
 
-enum class Trigger : std::uint8_t { Time = 0, Events = 1, Trades = 2 };
+struct EveryEvents {
+    std::int64_t every;
+};
+struct EveryTrades {
+    std::int64_t every;
+};
+using SamplerTrigger = std::variant<TimeBars, EveryEvents, EveryTrades>;
 
 struct SamplerSpec {
     std::string name;
-    Trigger trigger = Trigger::Time;
-    std::int64_t every = defaults::kSamplerPeriodNs;
-    bool fill_gaps = false;
+    SamplerTrigger trigger;
     std::vector<std::string> columns;
 
-    static SamplerSpec Time(std::string name, std::int64_t interval_ns) {
-        return SamplerSpec{std::move(name), Trigger::Time, interval_ns, false, {}};
+    static SamplerSpec Time(std::string name, std::int64_t every, bool fill_gaps = false) {
+        return SamplerSpec{std::move(name), TimeBars{every, fill_gaps}, {}};
     }
-    static SamplerSpec Events(std::string name, std::int64_t count) {
-        return SamplerSpec{std::move(name), Trigger::Events, count, false, {}};
+    static SamplerSpec Events(std::string name, std::int64_t every) {
+        return SamplerSpec{std::move(name), EveryEvents{every}, {}};
     }
-    static SamplerSpec Trades(std::string name, std::int64_t count) {
-        return SamplerSpec{std::move(name), Trigger::Trades, count, false, {}};
+    static SamplerSpec Trades(std::string name, std::int64_t every) {
+        return SamplerSpec{std::move(name), EveryTrades{every}, {}};
     }
 
-    SamplerSpec&& FillGaps(bool on = true) && {
-        fill_gaps = on;
-        return std::move(*this);
+    std::int64_t Every() const noexcept {
+        return std::visit([](const auto& t) { return t.every; }, trigger);
     }
     SamplerSpec&& Columns(std::vector<std::string> names) && {
         columns = std::move(names);
@@ -53,18 +54,21 @@ struct SamplerColumn {
 };
 
 class Sampler {
-public:
-    Sampler(SamplerSpec spec, std::vector<std::string> names, std::vector<SamplerColumn> columns,
-            RowSink* sink = nullptr, std::uint32_t sampler_index = 0, std::uint32_t instrument = 0);
+    template <typename Self, typename Fn>
+    decltype(auto) Visit(this Self& self, Fn&& fn) {
+        if (auto* bar = std::get_if<BarTrigger>(&self.trigger_)) return fn(*bar);
+        return fn(*std::get_if<CountTrigger>(&self.trigger_));
+    }
 
-    const SamplerSpec& Spec() const noexcept { return spec_; }
+public:
+    Sampler(const SamplerTrigger& trigger, std::vector<std::string> names, std::vector<SamplerColumn> columns,
+            RowSink* sink, std::uint32_t table, std::uint32_t instrument);
+
     const RowBuffer& Rows() const noexcept { return rows_; }
-    RowBuffer& Rows() noexcept { return rows_; }
-    std::size_t Ncol() const noexcept { return columns_.size(); }
+    std::size_t Ncol() const noexcept { return sources_.size(); }
 
     std::int64_t Due() const noexcept {
-        if (const auto* bar = std::get_if<BarTrigger>(&trigger_)) return bar->Due();
-        return std::get_if<CountTrigger>(&trigger_)->Due();
+        return Visit([](const auto& trigger) { return trigger.Due(); });
     }
 
     template <typename Reader>
@@ -86,11 +90,11 @@ public:
     void ResetBaseline(std::span<const double> values) noexcept;
 
 private:
-    template <typename Fn>
-    void Visit(Fn&& fn) {
-        if (auto* bar = std::get_if<BarTrigger>(&trigger_)) fn(*bar);
-        else fn(*std::get_if<CountTrigger>(&trigger_));
-    }
+    struct DeltaColumn {
+        std::size_t slot;
+        double baseline = 0.0;
+        double carry = 0.0;
+    };
 
     template <typename Reader>
     auto Emitter(Reader& read) {
@@ -99,15 +103,13 @@ private:
 
     void Emit(std::int64_t ts, std::span<const double> values);
 
-    SamplerSpec spec_;
     AnyTrigger trigger_;
-    std::vector<SamplerColumn> columns_;
+    std::vector<std::size_t> sources_;
+    std::vector<DeltaColumn> deltas_;
     RowBuffer rows_;
-    std::vector<double> baseline_;
-    std::vector<double> carry_;
     std::vector<double> row_;
     RowSink* sink_;
-    std::uint32_t sampler_index_;
+    std::uint32_t table_;
     std::uint32_t instrument_;
 };
 

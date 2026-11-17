@@ -13,7 +13,6 @@ public:
     explicit RowBuffer(std::vector<std::string> columns) : columns_(std::move(columns)) {}
 
     const std::vector<std::string>& Columns() const noexcept { return columns_; }
-    std::size_t Ncol() const noexcept { return columns_.size(); }
     std::size_t RowCount() const noexcept { return ts_.size(); }
     bool Empty() const noexcept { return ts_.empty(); }
 
@@ -29,14 +28,6 @@ public:
     }
 
     double At(std::size_t i, std::size_t j) const noexcept { return data_[i * columns_.size() + j]; }
-
-    std::span<const std::int64_t> Timestamps() const noexcept { return ts_; }
-    std::span<const double> Data() const noexcept { return data_; }
-
-    void Clear() noexcept {
-        ts_.clear();
-        data_.clear();
-    }
 
 private:
     std::vector<std::string> columns_;

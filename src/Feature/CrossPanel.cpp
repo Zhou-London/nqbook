@@ -6,7 +6,7 @@
 namespace nq {
 
 CrossPanel::CrossPanel(std::size_t nin, std::size_t nout, std::uint32_t capacity) : nin_(nin), nout_(nout) {
-    Reserve(std::max<std::uint32_t>(capacity, 1));
+    Reserve(capacity);
 }
 
 CrossPanel::Slab CrossPanel::Allocate(std::size_t ncol, std::uint32_t stride) {
@@ -17,7 +17,8 @@ CrossPanel::Slab CrossPanel::Allocate(std::size_t ncol, std::uint32_t stride) {
     return slab;
 }
 
-void CrossPanel::Extend(std::uint32_t nrow) {
+void CrossPanel::Ensure(std::uint32_t nrow) {
+    if (nrow <= nrow_) return;
     if (nrow > stride_) Reserve(std::max(nrow, stride_ * 2));
     nrow_ = nrow;
 }
@@ -30,10 +31,8 @@ void CrossPanel::Reserve(std::uint32_t capacity) {
     for (std::size_t c = 0; c < nout_; ++c) std::copy_n(out_.get() + c * stride_, nrow_, out.get() + c * stride);
     in_ = std::move(in);
     out_ = std::move(out);
-    valid_.resize(stride / 64, 0);
-    dirty_.resize(stride / 64, 0);
-    changed_.reserve(stride);
-    valid_rows_.reserve(stride);
+    valid_.Reserve(stride);
+    changed_.Reserve(stride);
     stride_ = stride;
 }
 

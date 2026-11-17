@@ -9,11 +9,7 @@ AdapterEngine<Record>::AdapterEngine(host::AdapterInstance adapter, std::size_t 
     : adapter_(std::move(adapter)), queue_(queue_capacity) {}
 
 template <class Record>
-AdapterEngine<Record>::~AdapterEngine() { Stop(); }
-
-template <class Record>
 void AdapterEngine<Record>::Start() {
-    if (thread_.joinable()) return;
     thread_ = std::jthread([this](std::stop_token st) { Run(st); });
 }
 
@@ -36,13 +32,11 @@ template <class Record>
 void AdapterEngine<Record>::Discover(std::uint32_t id) {
     if (!seen_.insert(id).second) return;
     
-    std::optional<Instrument> found;
-    if (auto i = adapter_.Instrument(id)) {
-        found = Instrument{id, i->symbol ? i->symbol : "", i->tick_size, i->lot_size};
-    }
+    const auto found = adapter_.Instrument(id);
+    if (!found) return;
     
     std::lock_guard lock(mu_);
-    instruments_.emplace(id, std::move(found));
+    instruments_.emplace(id, Instrument{id, found->symbol ? found->symbol : "", found->tick_size, found->lot_size});
 }
 
 template <class Record>
@@ -59,7 +53,6 @@ bool AdapterEngine<Record>::Push(Record record, const std::stop_token& st) noexc
         std::this_thread::yield();
     }
     
-    pushed_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 

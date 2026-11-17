@@ -1,7 +1,6 @@
 #include <Clock/TimerWheel.h>
 
 #include <algorithm>
-#include <bit>
 
 namespace nq {
 
@@ -41,13 +40,13 @@ bool TimerWheel::CollectDue(std::int64_t now) {
 }
 
 void TimerWheel::SweepUsedSlots(std::uint32_t first, std::uint32_t last, std::int64_t now) {
-    for (std::uint32_t slot = first; (slot = FindUsedSlot(slot, last)) != kNil; ++slot) Sweep(slot, now);
+    for (std::uint32_t slot = first; (slot = used_.FindSet(slot, last)) != Bitmap::kNone; ++slot) Sweep(slot, now);
 }
 
 void TimerWheel::Sweep(std::uint32_t slot, std::int64_t now) {
     std::uint32_t key = slots_[slot].head;
     slots_[slot] = Slot{};
-    MarkEmpty(slot);
+    used_.Clear(slot);
 
     while (key != kNil) {
         Timer& t = timers_[key];
@@ -75,7 +74,7 @@ void TimerWheel::Link(std::uint32_t key, std::uint32_t slot) noexcept {
     if (t.prev != kNil) timers_[t.prev].next = key;
     else slots_[slot].head = key;
     slots_[slot].tail = key;
-    MarkUsed(slot);
+    used_.Set(slot);
 }
 
 void TimerWheel::Unlink(std::uint32_t key) noexcept {
@@ -84,7 +83,7 @@ void TimerWheel::Unlink(std::uint32_t key) noexcept {
     else slots_[t.slot].head = t.next;
     if (t.next != kNil) timers_[t.next].prev = t.prev;
     else slots_[t.slot].tail = t.prev;
-    if (slots_[t.slot].head == kNil) MarkEmpty(t.slot);
+    if (slots_[t.slot].head == kNil) used_.Clear(t.slot);
 }
 
 std::int64_t TimerWheel::IdleUntil() const noexcept {
@@ -96,33 +95,25 @@ std::int64_t TimerWheel::IdleUntil() const noexcept {
 }
 
 std::int64_t TimerWheel::NextUsedTick(std::int64_t from) const noexcept {
-    const std::uint32_t steps = StepsToUsedSlot(TickSlot(from));
-    return steps == kNil ? kNever : from + steps;
+    const auto steps = StepsToUsedSlot(TickSlot(from));
+    return steps ? from + *steps : kNever;
 }
 
 std::int64_t TimerWheel::NextUsedLap(std::int64_t from) const noexcept {
-    const std::uint32_t steps = StepsToUsedSlot(LapSlot(from));
-    return steps == kNil ? kNever : from + steps;
+    const auto steps = StepsToUsedSlot(LapSlot(from));
+    return steps ? from + *steps : kNever;
 }
 
-std::uint32_t TimerWheel::StepsToUsedSlot(std::uint32_t slot) const noexcept {
+std::optional<std::uint32_t> TimerWheel::StepsToUsedSlot(std::uint32_t slot) const noexcept {
     const std::uint32_t level_first = slot & ~(kSlots - 1);
     const std::uint32_t level_last = level_first + kSlots - 1;
 
-    if (const std::uint32_t ahead = FindUsedSlot(slot, level_last); ahead != kNil) return ahead - slot;
-    if (slot == level_first) return kNil;
-    if (const std::uint32_t wrapped = FindUsedSlot(level_first, slot - 1); wrapped != kNil) return kSlots + wrapped - slot;
-    return kNil;
-}
-
-std::uint32_t TimerWheel::FindUsedSlot(std::uint32_t first, std::uint32_t last) const noexcept {
-    for (std::uint32_t w = first / 64; w <= last / 64; ++w) {
-        std::uint64_t word = used_[w];
-        if (w == first / 64) word &= ~std::uint64_t{0} << (first % 64);
-        if (w == last / 64) word &= ~std::uint64_t{0} >> (63 - last % 64);
-        if (word != 0) return w * 64 + static_cast<std::uint32_t>(std::countr_zero(word));
+    if (const std::uint32_t ahead = used_.FindSet(slot, level_last); ahead != Bitmap::kNone) return ahead - slot;
+    if (slot == level_first) return std::nullopt;
+    if (const std::uint32_t wrapped = used_.FindSet(level_first, slot - 1); wrapped != Bitmap::kNone) {
+        return kSlots + wrapped - slot;
     }
-    return kNil;
+    return std::nullopt;
 }
 
 }  // namespace nq

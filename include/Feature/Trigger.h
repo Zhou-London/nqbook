@@ -4,12 +4,13 @@
 #include <variant>
 
 #include <Clock/TimerWheel.h>
+#include <Feature/BarClock.h>
 
 namespace nq {
 
 class BarTrigger {
 public:
-    BarTrigger(std::int64_t interval, bool fill_gaps) noexcept : interval_(interval), fill_gaps_(fill_gaps) {}
+    explicit BarTrigger(TimeBars bars) noexcept : clock_(bars) {}
 
     template <typename Emit>
     void OnEvent(std::int64_t, bool, Emit&&) noexcept {
@@ -18,45 +19,24 @@ public:
 
     template <typename Emit>
     void Advance(std::int64_t ts, Emit&& emit) {
-        if (!started_) {
-            started_ = true;
-            next_ = BarAfter(ts);
-            return;
-        }
-        if (ts < next_) return;
-        if (fill_gaps_) {
-            while (ts >= next_) {
-                Fire(next_, emit);
-                next_ += interval_;
-            }
-            return;
-        }
-        if (dirty_) Fire(next_, emit);
-        next_ = BarAfter(ts);
+        clock_.Advance(ts, dirty_, [&](std::int64_t at) { Fire(at, emit); });
     }
 
     template <typename Emit>
     void Close(Emit&& emit) {
-        if (started_ && (dirty_ || fill_gaps_)) Fire(next_, emit);
+        if (clock_.Armed(dirty_)) Fire(clock_.Next(), emit);
     }
 
-    std::int64_t Due() const noexcept {
-        return started_ && (dirty_ || fill_gaps_) ? next_ : TimerWheel::kNever;
-    }
+    std::int64_t Due() const noexcept { return clock_.Armed(dirty_) ? clock_.Next() : TimerWheel::kNever; }
 
 private:
-    std::int64_t BarAfter(std::int64_t ts) const noexcept { return (ts / interval_ + 1) * interval_; }
-
     template <typename Emit>
     void Fire(std::int64_t at, Emit& emit) {
         dirty_ = false;
         emit(at);
     }
 
-    std::int64_t interval_;
-    bool fill_gaps_;
-    std::int64_t next_ = 0;
-    bool started_ = false;
+    BarClock clock_;
     bool dirty_ = false;
 };
 

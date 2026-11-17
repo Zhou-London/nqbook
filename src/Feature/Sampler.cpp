@@ -6,55 +6,53 @@ namespace nq {
 
 namespace {
 
-AnyTrigger MakeTrigger(const SamplerSpec& spec) {
-    switch (spec.trigger) {
-        case Trigger::Time: return BarTrigger(spec.every, spec.fill_gaps);
-        case Trigger::Events: return CountTrigger(spec.every, false);
-        case Trigger::Trades: return CountTrigger(spec.every, true);
-    }
-    return CountTrigger(spec.every, false);
-}
+AnyTrigger MakeTrigger(const TimeBars& bars) { return BarTrigger(bars); }
+AnyTrigger MakeTrigger(const EveryEvents& events) { return CountTrigger(events.every, false); }
+AnyTrigger MakeTrigger(const EveryTrades& trades) { return CountTrigger(trades.every, true); }
 
 }  // namespace
 
-Sampler::Sampler(SamplerSpec spec, std::vector<std::string> names, std::vector<SamplerColumn> columns,
-                 RowSink* sink, std::uint32_t sampler_index, std::uint32_t instrument)
-    : spec_(std::move(spec)),
-      trigger_(MakeTrigger(spec_)),
-      columns_(std::move(columns)),
+Sampler::Sampler(const SamplerTrigger& trigger, std::vector<std::string> names, std::vector<SamplerColumn> columns,
+                 RowSink* sink, std::uint32_t table, std::uint32_t instrument)
+    : trigger_(std::visit([](const auto& t) { return MakeTrigger(t); }, trigger)),
       rows_(std::move(names)),
-      baseline_(columns_.size(), 0.0),
-      carry_(columns_.size(), 0.0),
-      row_(columns_.size(), 0.0),
+      row_(columns.size(), 0.0),
       sink_(sink),
-      sampler_index_(sampler_index),
-      instrument_(instrument) {}
+      table_(table),
+      instrument_(instrument) {
+    sources_.reserve(columns.size());
+    for (const SamplerColumn& c : columns) {
+        if (c.kind == NQ_COLUMN_CUMULATIVE) deltas_.push_back(DeltaColumn{sources_.size()});
+        sources_.push_back(c.index);
+    }
+}
 
 void Sampler::Emit(std::int64_t ts, std::span<const double> values) {
-    for (std::size_t i = 0; i < columns_.size(); ++i) {
-        const double v = values[columns_[i].index];
-        if (columns_[i].kind == NQ_COLUMN_CUMULATIVE) {
-            row_[i] = v - baseline_[i] + carry_[i];
-            baseline_[i] = v;
-            carry_[i] = 0.0;
-        } else {
-            row_[i] = v;
-        }
+    for (std::size_t i = 0; i < sources_.size(); ++i) row_[i] = values[sources_[i]];
+    for (DeltaColumn& d : deltas_) {
+        const double v = row_[d.slot];
+        row_[d.slot] = v - d.baseline + d.carry;
+        d.baseline = v;
+        d.carry = 0.0;
     }
-    if (sink_) sink_->Push(FeatureRow{sampler_index_, instrument_, ts, row_});
-    else rows_.Push(ts, row_);
+    if (!sink_) {
+        rows_.Push(ts, row_);
+        return;
+    }
+    FeatureBlock block = sink_->Acquire(table_);
+    block.table = table_;
+    block.ts = ts;
+    block.instruments.assign(1, instrument_);
+    block.values.assign(row_.begin(), row_.end());
+    sink_->Push(std::move(block));
 }
 
 void Sampler::CarryDelta(std::span<const double> values) noexcept {
-    for (std::size_t i = 0; i < columns_.size(); ++i) {
-        if (columns_[i].kind == NQ_COLUMN_CUMULATIVE) carry_[i] += values[columns_[i].index] - baseline_[i];
-    }
+    for (DeltaColumn& d : deltas_) d.carry += values[sources_[d.slot]] - d.baseline;
 }
 
 void Sampler::ResetBaseline(std::span<const double> values) noexcept {
-    for (std::size_t i = 0; i < columns_.size(); ++i) {
-        if (columns_[i].kind == NQ_COLUMN_CUMULATIVE) baseline_[i] = values[columns_[i].index];
-    }
+    for (DeltaColumn& d : deltas_) d.baseline = values[sources_[d.slot]];
 }
 
 }  // namespace nq

@@ -2,10 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <span>
-#include <string>
-#include <string_view>
 #include <vector>
 
 #include <nlib/common.h>
@@ -36,30 +33,27 @@ public:
     void BindCross(std::size_t plugin, const double* row, std::size_t stride) noexcept {
         instances_[plugin].BindCross(row, stride);
     }
-    void WatchCross(const std::uint64_t* epoch) noexcept { cross_epoch_ = epoch; }
+    void WatchCross(const std::uint64_t& epoch) noexcept { cross_epoch_ = &epoch; }
 
     const nq::Instrument& GetInstrument() const noexcept { return spec_; }
-    const FeatureCatalog& Catalog() const noexcept { return *catalog_; }
-    const std::vector<ColumnInfo>& Columns() const noexcept { return catalog_->Columns(); }
     std::size_t SamplerCount() const noexcept { return samplers_.size(); }
-    Sampler& GetSampler(std::size_t i) noexcept { return *samplers_[i]; }
-    const Sampler& GetSampler(std::size_t i) const noexcept { return *samplers_[i]; }
-    Sampler* FindSampler(std::string_view name) noexcept;
+    Sampler& GetSampler(std::size_t i) noexcept { return samplers_[i]; }
+    const Sampler& GetSampler(std::size_t i) const noexcept { return samplers_[i]; }
 
 private:
+    static constexpr std::uint64_t kStale = ~std::uint64_t{0};
+    static constexpr std::uint64_t kNoCross = 0;
+
     void ResetPlugins(std::int64_t ts);
     void NotifySamplers(std::int64_t ts, bool is_trade);
 
     const nq_book_view* book_;
-    const FeatureCatalog* catalog_;
     Instrument spec_;
     std::vector<host::PluginInstance> instances_;
-    std::vector<std::size_t> offsets_;
     std::vector<double> values_;
-    bool values_fresh_ = false;
-    const std::uint64_t* cross_epoch_ = nullptr;
-    std::uint64_t seen_epoch_ = 0;
-    std::vector<std::unique_ptr<Sampler>> samplers_;
+    const std::uint64_t* cross_epoch_ = &kNoCross;
+    std::uint64_t values_epoch_ = kStale;
+    std::vector<Sampler> samplers_;
 };
 
 }  // namespace nq

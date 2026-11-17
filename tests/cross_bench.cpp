@@ -6,7 +6,6 @@
 #include <cstdlib>
 #include <memory>
 #include <random>
-#include <string>
 #include <vector>
 
 #include <PipelineTable.h>
@@ -21,13 +20,12 @@ constexpr std::int64_t kMs = 1'000'000;
 
 struct CountingSink : nq::RowSink {
     void Register(const nq::Instrument&) override {}
-    void Push(nq::FeatureRow) override { ++rows; }
     void Push(nq::FeatureBlock block) override {
         rows += block.instruments.size();
         ++blocks;
         spare = std::move(block);
     }
-    nq::FeatureBlock Acquire() override { return std::move(spare); }
+    nq::FeatureBlock Acquire(std::uint32_t) override { return std::move(spare); }
 
     std::uint64_t rows = 0;
     std::uint64_t blocks = 0;
@@ -79,8 +77,7 @@ template <class Op>
 nq::CrossSpec Cross(std::int64_t every, bool fill_gaps) {
     nq::CrossSpec spec;
     spec.name = "x";
-    spec.every = every;
-    spec.fill_gaps = fill_gaps;
+    spec.bars = {every, fill_gaps};
     spec.inputs = {"f.mid"};
     spec.outputs = {"out"};
     spec.make = [] { return std::make_unique<Op>(); };
@@ -116,12 +113,14 @@ struct Result {
     std::uint64_t blocks = 0;
 };
 
+void LoadExample(nq::FeatureCatalog& c) { c.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "f"); }
+void LoadCrossPlugin(nq::FeatureCatalog& c) { c.LoadPlugin(NQ_EXAMPLE_CROSS_FEATURES_PATH, "c"); }
+
 template <class Configure>
-Result Run(const Feed& feed, Configure&& configure, bool example = true) {
+Result Run(const Feed& feed, Configure&& configure) {
     Result best;
     for (int rep = 0; rep < 3; ++rep) {
         nq::FeatureCatalog catalog;
-        if (example) catalog.LoadPlugin(NQ_EXAMPLE_FEATURES_PATH, "f");
         configure(catalog);
         CountingSink sink;
         nq::PipelineTable<nq_mbo> table(catalog, nullptr, {.expected_orders = 8}, 8192, &sink);
@@ -155,29 +154,42 @@ int main(int argc, char** argv) {
     std::printf("instruments=%u events=%zu events_per_ms=%lld bars=%llu (1ms bars)\n", instruments, count,
                 static_cast<long long>(per_ms), static_cast<unsigned long long>(feed.bars));
 
-    const Result base = Run(feed, [](nq::FeatureCatalog&) {});
+    const Result base = Run(feed, LoadExample);
     Print("no sampler", base, base, feed);
     Print("row sampler 1ms", Run(feed, [](nq::FeatureCatalog& c) {
+              LoadExample(c);
               c.AddSampler(nq::SamplerSpec::Time("s", kMs).Columns({"f.mid"}));
           }), base, feed);
     Print("row sampler 1ms fill", Run(feed, [](nq::FeatureCatalog& c) {
-              c.AddSampler(nq::SamplerSpec::Time("s", kMs).FillGaps().Columns({"f.mid"}));
+              LoadExample(c);
+              c.AddSampler(nq::SamplerSpec::Time("s", kMs, true).Columns({"f.mid"}));
           }), base, feed);
-    Print("cross noop", Run(feed, [](nq::FeatureCatalog& c) { c.AddCross(Cross<Noop>(kMs, false)); }), base, feed);
-    Print("cross zscore", Run(feed, [](nq::FeatureCatalog& c) { c.AddCross(Cross<ZScore>(kMs, false)); }), base, feed);
-    Print("cross zscore fill", Run(feed, [](nq::FeatureCatalog& c) { c.AddCross(Cross<ZScore>(kMs, true)); }), base, feed);
-    Print("cross rank", Run(feed, [](nq::FeatureCatalog& c) { c.AddCross(Cross<Rank>(kMs, false)); }), base, feed);
+    Print("cross noop", Run(feed, [](nq::FeatureCatalog& c) {
+              LoadExample(c);
+              c.AddCross(Cross<Noop>(kMs, false));
+          }), base, feed);
+    Print("cross zscore", Run(feed, [](nq::FeatureCatalog& c) {
+              LoadExample(c);
+              c.AddCross(Cross<ZScore>(kMs, false));
+          }), base, feed);
+    Print("cross zscore fill", Run(feed, [](nq::FeatureCatalog& c) {
+              LoadExample(c);
+              c.AddCross(Cross<ZScore>(kMs, true));
+          }), base, feed);
+    Print("cross rank", Run(feed, [](nq::FeatureCatalog& c) {
+              LoadExample(c);
+              c.AddCross(Cross<Rank>(kMs, false));
+          }), base, feed);
 
-    const auto with_plugin = [](nq::FeatureCatalog& c) { c.LoadPlugin(NQ_EXAMPLE_CROSS_FEATURES_PATH, "c"); };
-    const Result plugin_base = Run(feed, with_plugin, false);
+    const Result plugin_base = Run(feed, LoadCrossPlugin);
     Print("plugin, no cross", plugin_base, plugin_base, feed);
-    Print("plugin cross mean+z+rank", Run(feed, [&](nq::FeatureCatalog& c) {
-              with_plugin(c);
+    Print("plugin cross mean+z+rank", Run(feed, [](nq::FeatureCatalog& c) {
+              LoadCrossPlugin(c);
               c.AddCross("x", "c", kMs);
-          }, false), plugin_base, feed);
-    Print("plugin cross, fill", Run(feed, [&](nq::FeatureCatalog& c) {
-              with_plugin(c);
+          }), plugin_base, feed);
+    Print("plugin cross, fill", Run(feed, [](nq::FeatureCatalog& c) {
+              LoadCrossPlugin(c);
               c.AddCross("x", "c", kMs, true);
-          }, false), plugin_base, feed);
+          }), plugin_base, feed);
     return 0;
 }

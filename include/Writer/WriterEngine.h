@@ -3,8 +3,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
-#include <mutex>
 #include <stop_token>
 #include <string>
 #include <thread>
@@ -21,46 +21,32 @@ namespace nq {
 class WriterEngine : public RowSink {
 public:
     WriterEngine(std::unique_ptr<ParquetWriter> writer, std::size_t queue_capacity);
-    ~WriterEngine() override;
 
     WriterEngine(const WriterEngine&) = delete;
     WriterEngine& operator=(const WriterEngine&) = delete;
 
-    void Start();
     void Register(const Instrument& instrument) override;
-    void Push(FeatureRow row) override;
     void Push(FeatureBlock block) override;
-    FeatureBlock Acquire() override;
-    void Finish();
-    void Abort() noexcept;
+    FeatureBlock Acquire(std::uint32_t table) override;
+    const std::string& Finish();
 
     const ParquetWriter& Writer() const noexcept { return *writer_; }
-    bool Failed() const noexcept { return failed_.load(std::memory_order_acquire); }
-    std::string Error() const;
-    std::uint64_t Pushed() const noexcept { return pushed_.load(std::memory_order_relaxed); }
     std::uint64_t Written() const noexcept { return written_.load(std::memory_order_relaxed); }
     std::uint64_t Stalls() const noexcept { return stalls_.load(std::memory_order_relaxed); }
 
 private:
-    using Message = std::variant<FeatureRow, Instrument, FeatureBlock>;
+    using Message = std::variant<FeatureBlock, Instrument>;
 
-    static constexpr std::size_t kSpareBlocks = 64;
-
-    bool Enqueue(Message message);
+    void Enqueue(Message message);
     void Recycle(FeatureBlock block);
     void Run(std::stop_token st);
-    void Fail(const std::string& message);
 
     std::unique_ptr<ParquetWriter> writer_;
     nlib::single_queue<Message> queue_;
-    nlib::single_queue<FeatureBlock> spare_{kSpareBlocks};
-    std::atomic<bool> draining_{false};
+    std::deque<nlib::single_queue<FeatureBlock>> spare_by_table_;
     std::atomic<bool> failed_{false};
-    std::atomic<bool> abort_{false};
-    std::atomic<std::uint64_t> pushed_{0};
     std::atomic<std::uint64_t> written_{0};
     std::atomic<std::uint64_t> stalls_{0};
-    mutable std::mutex mu_;
     std::string error_;
     std::jthread thread_;
 };

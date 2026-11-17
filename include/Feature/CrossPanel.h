@@ -7,9 +7,35 @@
 #include <span>
 #include <vector>
 
-#include <Feature/Cross.h>
+#include <nq/feature_abi.h>
+
+#include <Bitmap.h>
 
 namespace nq {
+
+class RowSet {
+public:
+    void Reserve(std::uint32_t rows) {
+        members_.Resize(rows);
+        rows_.reserve(rows);
+    }
+
+    bool Contains(std::uint32_t row) const noexcept { return members_.Test(row); }
+    void Insert(std::uint32_t row) {
+        if (!members_.TestAndSet(row)) rows_.push_back(row);
+    }
+    void Clear() noexcept {
+        for (const std::uint32_t row : rows_) members_.Clear(row);
+        rows_.clear();
+    }
+
+    std::span<const std::uint32_t> Rows() const noexcept { return rows_; }
+    const std::uint64_t* Words() const noexcept { return members_.Words(); }
+
+private:
+    Bitmap members_;
+    std::vector<std::uint32_t> rows_;
+};
 
 class CrossPanel {
 public:
@@ -27,39 +53,20 @@ public:
     const double* In(std::size_t column) const noexcept { return in_.get() + column * stride_; }
     const double* Out(std::size_t column) const noexcept { return out_.get() + column * stride_; }
 
-    std::span<const std::uint32_t> Changed() const noexcept { return changed_; }
-    std::span<const std::uint32_t> ValidRows() const noexcept { return valid_rows_; }
-    bool Valid(std::uint32_t row) const noexcept { return row < nrow_ && ((valid_[row >> 6] >> (row & 63)) & 1); }
+    std::span<const std::uint32_t> Changed() const noexcept { return changed_.Rows(); }
+    std::span<const std::uint32_t> ValidRows() const noexcept { return valid_.Rows(); }
+    bool Valid(std::uint32_t row) const noexcept { return valid_.Contains(row); }
 
-    void Touch(std::uint32_t row) {
-        if (row >= nrow_) Extend(row + 1);
-        std::uint64_t& word = dirty_[row >> 6];
-        const std::uint64_t bit = std::uint64_t{1} << (row & 63);
-        if (word & bit) return;
-        word |= bit;
-        changed_.push_back(row);
-    }
+    void Touch(std::uint32_t row) { changed_.Insert(row); }
+    void MarkValid(std::uint32_t row) { valid_.Insert(row); }
+    void ClearChanged() noexcept { changed_.Clear(); }
 
-    void MarkValid(std::uint32_t row) {
-        std::uint64_t& word = valid_[row >> 6];
-        const std::uint64_t bit = std::uint64_t{1} << (row & 63);
-        if (word & bit) return;
-        word |= bit;
-        valid_rows_.push_back(row);
-    }
-
-    void ClearChanged() noexcept {
-        for (const std::uint32_t row : changed_) dirty_[row >> 6] &= ~(std::uint64_t{1} << (row & 63));
-        changed_.clear();
-    }
-
-    void Ensure(std::uint32_t nrow) {
-        if (nrow > nrow_) Extend(nrow);
-    }
+    void Ensure(std::uint32_t nrow);
 
     nq_cross_panel View(std::int64_t ts) noexcept {
-        return nq_cross_panel{ts, nrow_, stride_, in_.get(), out_.get(), valid_.data(), changed_.data(),
-                              static_cast<std::uint32_t>(changed_.size())};
+        const std::span<const std::uint32_t> changed = Changed();
+        return nq_cross_panel{ts, nrow_, stride_, in_.get(), out_.get(), valid_.Words(), changed.data(),
+                              static_cast<std::uint32_t>(changed.size())};
     }
 
 private:
@@ -69,7 +76,6 @@ private:
     using Slab = std::unique_ptr<double[], AlignedDelete>;
 
     static Slab Allocate(std::size_t ncol, std::uint32_t stride);
-    void Extend(std::uint32_t nrow);
     void Reserve(std::uint32_t capacity);
 
     std::size_t nin_;
@@ -78,10 +84,8 @@ private:
     std::uint32_t stride_ = 0;
     Slab in_;
     Slab out_;
-    std::vector<std::uint64_t> valid_;
-    std::vector<std::uint64_t> dirty_;
-    std::vector<std::uint32_t> changed_;
-    std::vector<std::uint32_t> valid_rows_;
+    RowSet valid_;
+    RowSet changed_;
 };
 
 }  // namespace nq
