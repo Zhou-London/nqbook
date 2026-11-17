@@ -12,6 +12,7 @@
 
 #include <Clock/TimerWheel.h>
 #include <Defaults.h>
+#include <Feature/CrossStage.h>
 #include <Feature/FeatureCatalog.h>
 #include <Pipeline.h>
 
@@ -59,6 +60,7 @@ public:
     const Pipeline<Record>* Find(std::uint32_t instrument) const noexcept;
     const std::vector<Entry>& Entries() const noexcept { return entries_; }
     const std::vector<Pipeline<Record>*>& Live() const noexcept { return live_; }
+    const std::vector<CrossStage>& Crosses() const noexcept { return crosses_; }
     std::size_t InstrumentCount() const noexcept { return live_.size(); }
     const FeatureCatalog& Catalog() const noexcept { return *catalog_; }
     const FeedStats& Stats() const noexcept { return stats_; }
@@ -72,6 +74,10 @@ private:
     RowSink* sink_;
     std::vector<Entry> entries_;
     std::vector<Pipeline<Record>*> live_;
+    std::vector<FeatureEngine*> engines_;
+    std::vector<std::uint32_t> live_ids_;
+    std::vector<CrossStage> crosses_;
+    std::uint64_t cross_epoch_ = 0;
     TimerWheel timers_;
     FeedStats stats_;
 };

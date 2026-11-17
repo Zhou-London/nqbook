@@ -37,6 +37,10 @@ Sampler* FeatureEngine::FindSampler(std::string_view name) noexcept {
 }
 
 std::span<const double> FeatureEngine::ReadAll() {
+    if (cross_epoch_ && *cross_epoch_ != seen_epoch_) {
+        seen_epoch_ = *cross_epoch_;
+        values_fresh_ = false;
+    }
     if (!values_fresh_) {
         std::span<double> all(values_);
         for (std::size_t i = 0; i < instances_.size(); ++i) {

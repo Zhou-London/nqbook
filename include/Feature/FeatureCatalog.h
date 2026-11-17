@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -11,6 +12,7 @@
 #include <nq/feature_host.hpp>
 #include <nq/types.hpp>
 
+#include <Feature/Cross.h>
 #include <Feature/Sampler.h>
 
 namespace nq {
@@ -39,6 +41,13 @@ struct SamplerTemplate {
     std::vector<SamplerColumn> columns;
 };
 
+struct CrossTemplate {
+    CrossSpec spec;
+    std::vector<std::size_t> inputs;
+    std::vector<std::string> names;
+    std::optional<std::size_t> plugin;
+};
+
 class FeatureCatalog {
 public:
     /* ---------- CTR/DTRs ---------- */
@@ -49,6 +58,8 @@ public:
     /* ---------- Member Functions ---------- */
     std::size_t LoadPlugin(const std::string& path, std::string name = "", KeyValues params = {});
     void AddSampler(SamplerSpec spec);
+    void AddCross(CrossSpec spec);
+    void AddCross(std::string name, std::string_view plugin, std::int64_t every, bool fill_gaps = false);
     void RequireFeed(Feed adapter_feed) const;
 
     /* ---------- Getters ---------- */
@@ -61,9 +72,12 @@ public:
     const std::vector<ColumnInfo>& Columns() const noexcept { return columns_; }
     const std::vector<SamplerTemplate>& Samplers() const noexcept { return samplers_; }
     const SamplerTemplate* FindSampler(std::string_view name) const noexcept;
+    const std::vector<CrossTemplate>& Crosses() const noexcept { return crosses_; }
+    const CrossTemplate* FindCross(std::string_view name) const noexcept;
 
 private:
     std::size_t FindColumn(std::string_view name) const;
+    std::size_t FindPlugin(std::string_view name) const;
 
     /* ---------- Internal States ---------- */
     Feed feed_ = Feed::MBO;
@@ -72,6 +86,7 @@ private:
     std::vector<KeyValues> params_;
     std::vector<ColumnInfo> columns_;
     std::vector<SamplerTemplate> samplers_;
+    std::vector<CrossTemplate> crosses_;
 };
 
 }  // namespace nq

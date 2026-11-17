@@ -28,6 +28,22 @@ void WriterEngine::Push(FeatureRow row) {
     if (Enqueue(std::move(row))) pushed_.fetch_add(1, std::memory_order_relaxed);
 }
 
+void WriterEngine::Push(FeatureBlock block) {
+    const std::uint64_t rows = block.instruments.size();
+    if (Enqueue(std::move(block))) pushed_.fetch_add(rows, std::memory_order_relaxed);
+}
+
+FeatureBlock WriterEngine::Acquire() {
+    if (auto block = spare_.try_pop()) return std::move(*block);
+    return {};
+}
+
+void WriterEngine::Recycle(FeatureBlock block) {
+    block.instruments.clear();
+    block.values.clear();
+    spare_.try_push(std::move(block));
+}
+
 bool WriterEngine::Enqueue(Message message) {
     bool stalled = false;
     while (!queue_.try_push(std::move(message))) {
@@ -67,6 +83,10 @@ void WriterEngine::Run(std::stop_token st) {
                 if (const auto* row = std::get_if<FeatureRow>(&*message)) {
                     writer_->Write(*row);
                     written_.fetch_add(1, std::memory_order_relaxed);
+                } else if (auto* block = std::get_if<FeatureBlock>(&*message)) {
+                    writer_->Write(*block);
+                    written_.fetch_add(block->instruments.size(), std::memory_order_relaxed);
+                    Recycle(std::move(*block));
                 } else {
                     writer_->Register(std::get<Instrument>(*message));
                 }

@@ -94,6 +94,15 @@ void PrintCatalogText(std::FILE* out, const FeatureCatalog& catalog) {
                      static_cast<long long>(s.every), s.trigger == Trigger::Time ? "ns" : "",
                      s.fill_gaps ? "yes" : "no", t.columns.size());
     }
+
+    if (catalog.Crosses().empty()) return;
+    std::fprintf(out, "crosses (%zu)\n", catalog.Crosses().size());
+    for (const auto& t : catalog.Crosses()) {
+        const auto& s = t.spec;
+        std::fprintf(out, "  %-16s %s every=%lldns fill_gaps=%s inputs=%zu cols=%zu\n", s.name.c_str(),
+                     t.plugin ? catalog.PluginName(*t.plugin).c_str() : "-", static_cast<long long>(s.every),
+                     s.fill_gaps ? "yes" : "no", t.inputs.size(), t.names.size());
+    }
 }
 
 void PrintCatalogJson(std::FILE* out, const FeatureCatalog& catalog) {
@@ -124,6 +133,19 @@ void PrintCatalogJson(std::FILE* out, const FeatureCatalog& catalog) {
         const auto& s = t.spec;
         std::fprintf(out, "%s\n    {\"name\": %s, \"trigger\": \"%s\", \"every\": %lld, \"fill_gaps\": %s, \"columns\": [",
                      i ? "," : "", JsonString(s.name).c_str(), TriggerName(s.trigger),
+                     static_cast<long long>(s.every), s.fill_gaps ? "true" : "false");
+        for (std::size_t j = 0; j < t.names.size(); ++j) {
+            std::fprintf(out, "%s%s", j ? ", " : "", JsonString(t.names[j]).c_str());
+        }
+        std::fprintf(out, "]}");
+    }
+    std::fprintf(out, "\n  ],\n  \"crosses\": [");
+    for (std::size_t i = 0; i < catalog.Crosses().size(); ++i) {
+        const auto& t = catalog.Crosses()[i];
+        const auto& s = t.spec;
+        std::fprintf(out, "%s\n    {\"name\": %s, \"plugin\": %s, \"every\": %lld, \"fill_gaps\": %s, \"columns\": [",
+                     i ? "," : "", JsonString(s.name).c_str(),
+                     t.plugin ? JsonString(catalog.PluginName(*t.plugin)).c_str() : "null",
                      static_cast<long long>(s.every), s.fill_gaps ? "true" : "false");
         for (std::size_t j = 0; j < t.names.size(); ++j) {
             std::fprintf(out, "%s%s", j ? ", " : "", JsonString(t.names[j]).c_str());

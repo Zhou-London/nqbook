@@ -9,12 +9,14 @@ target_compile_definitions(nqhpc_tests INTERFACE
     NQ_EXAMPLE_OHLCV_FEATURES_PATH="$<TARGET_FILE:example_ohlcv_features>"
     NQ_SYNTHETIC_OHLCV_ADAPTER_PATH="$<TARGET_FILE:synthetic_ohlcv>"
     NQ_TA_OHLCV_PATH="$<TARGET_FILE:ta_ohlcv>"
+    NQ_EXAMPLE_CROSS_FEATURES_PATH="$<TARGET_FILE:example_cross_features>"
 )
 
 function(nqhpc_add_test name)
     add_executable(${name} ${ARGN})
     target_link_libraries(${name} PRIVATE nqhpc_tests)
-    add_dependencies(${name} nqhpc example_features synthetic example_ohlcv_features synthetic_ohlcv ta_ohlcv)
+    add_dependencies(${name} nqhpc example_features synthetic example_ohlcv_features synthetic_ohlcv ta_ohlcv
+        example_cross_features)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
@@ -27,6 +29,14 @@ add_dependencies(engine_test ignore_reset_features)
 nqhpc_add_test(pipeline_table_test pipeline_table_test.cpp)
 nqhpc_add_test(ohlcv_test ohlcv_test.cpp)
 nqhpc_add_test(adapter_engine_test adapter_engine_test.cpp)
+nqhpc_add_test(nqlake_ohlcv_test nqlake_ohlcv_test.cpp)
+target_compile_definitions(nqlake_ohlcv_test PRIVATE NQ_LAKE_OHLCV_ADAPTER_PATH="$<TARGET_FILE:nqlake_ohlcv>")
+add_dependencies(nqlake_ohlcv_test nqlake_ohlcv)
 nqhpc_add_test(writer_test writer_test.cpp)
+nqhpc_add_test(cross_test cross_test.cpp)
+
+add_executable(cross_bench cross_bench.cpp)
+target_link_libraries(cross_bench PRIVATE nqhpc_tests)
+add_dependencies(cross_bench example_features example_cross_features)
 
 add_subdirectory(cli)

@@ -42,9 +42,13 @@ static double DoubleAt(const arrow::Table& t, const std::string& column, std::in
 
 static std::int64_t Int64At(const arrow::Table& t, const std::string& column, std::int64_t row) {
     const auto scalar = t.GetColumnByName(column)->GetScalar(row).ValueOrDie();
-    if (scalar->type->id() == arrow::Type::TIMESTAMP) return std::static_pointer_cast<arrow::TimestampScalar>(scalar)->value;
     if (scalar->type->id() == arrow::Type::UINT32) return std::static_pointer_cast<arrow::UInt32Scalar>(scalar)->value;
     return std::static_pointer_cast<arrow::Int64Scalar>(scalar)->value;
+}
+
+static std::int32_t DayAt(const arrow::Table& t, std::int64_t row) {
+    const auto scalar = t.GetColumnByName("date")->GetScalar(row).ValueOrDie();
+    return std::static_pointer_cast<arrow::Date32Scalar>(scalar)->value;
 }
 
 static std::string StringAt(const arrow::Table& t, const std::string& column, std::int64_t row) {
@@ -66,8 +70,8 @@ static int TestParquetWriter(const nq::FeatureCatalog& catalog, const fs::path& 
         for (int i = 0; i < 7; ++i) {
             w.Write(Row(0, static_cast<std::uint32_t>(1 + i % 2), kSec * (i + 1), {0.2 + i, 100.0, double(i), 0.0, 1.0}));
         }
-        w.Write(Row(1, 1, 5, {1.0}));
-        w.Write(Row(1, 2, 6, {2.0}));
+        w.Write(Row(1, 1, 86400 * kSec - 1, {1.0}));
+        w.Write(Row(1, 2, 86400 * kSec, {2.0}));
 
         bool threw = false;
         try { w.Write(Row(1, 1, 7, {1.0, 2.0})); } catch (const std::invalid_argument&) { threw = true; }
@@ -90,21 +94,25 @@ static int TestParquetWriter(const nq::FeatureCatalog& catalog, const fs::path& 
     }
 
     const Parquet bars = Read(dir / "1s.parquet");
-    CHECK(bars.table->num_rows() == 7 && bars.table->num_columns() == 8 && bars.row_groups == 3);
+    CHECK(bars.table->num_rows() == 7 && bars.table->num_columns() == 9 && bars.row_groups == 3);
     CHECK(bars.table->schema()->field(0)->name() == "instrument" && bars.table->schema()->field(1)->name() == "symbol");
     CHECK(bars.table->schema()->field(2)->name() == "ts");
-    CHECK(bars.table->schema()->field(3)->name() == "example_features.spread");
-    CHECK(bars.table->schema()->field(2)->type()->ToString() == "timestamp[ns, tz=UTC]");
+    CHECK(bars.table->schema()->field(3)->name() == "date");
+    CHECK(bars.table->schema()->field(4)->name() == "example_features.spread");
+    CHECK(bars.table->schema()->field(2)->type()->ToString() == "int64");
+    CHECK(bars.table->schema()->field(3)->type()->ToString() == "date32[day]");
     CHECK(Int64At(*bars.table, "instrument", 0) == 1 && Int64At(*bars.table, "instrument", 1) == 2);
     CHECK(StringAt(*bars.table, "symbol", 0) == "AAA" && StringAt(*bars.table, "symbol", 1) == "BBB");
-    CHECK(Int64At(*bars.table, "ts", 2) == 3 * kSec);
+    CHECK(Int64At(*bars.table, "ts", 2) == 3 * kSec && DayAt(*bars.table, 2) == 0);
     CHECK(Near(DoubleAt(*bars.table, "example_features.spread", 6), 6.2));
     CHECK(Near(DoubleAt(*bars.table, "example_features.buy_vol", 3), 3.0));
 
     const Parquet trades = Read(dir / "t.parquet");
-    CHECK(trades.table->num_rows() == 2 && trades.table->num_columns() == 4 && trades.row_groups == 1);
-    CHECK(trades.table->schema()->field(3)->name() == "example_features.trades");
+    CHECK(trades.table->num_rows() == 2 && trades.table->num_columns() == 5 && trades.row_groups == 1);
+    CHECK(trades.table->schema()->field(4)->name() == "example_features.trades");
     CHECK(StringAt(*trades.table, "symbol", 1) == "BBB");
+    CHECK(Int64At(*trades.table, "ts", 0) == 86400 * kSec - 1 && DayAt(*trades.table, 0) == 0);
+    CHECK(Int64At(*trades.table, "ts", 1) == 86400 * kSec && DayAt(*trades.table, 1) == 1);
     CHECK(Near(DoubleAt(*trades.table, "example_features.trades", 1), 2.0));
 
     const Parquet inst = Read(dir / "instruments.parquet");

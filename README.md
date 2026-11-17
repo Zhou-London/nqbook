@@ -41,6 +41,18 @@ The first command reads an MBO feed, the second an OHLCV feed.
 
 `run` writes into `out/` under the current directory. `--out-dir` picks another directory. `nqhpc help` lists the subcommands: `check`, `run`, and `check-feed`.
 
+Each sampler and cross table in Parquet has these columns, in order:
+
+| Column | Type | Contents |
+|---|---|---|
+| `instrument` | uint32 | instrument id |
+| `symbol` | string | instrument symbol |
+| `ts` | int64 | row time in nanoseconds since the Unix epoch, UTC |
+| `date` | date32 | UTC calendar day of `ts`, for partitioning |
+| one per feature | double | feature value |
+
+CSV output has the same columns without `date`.
+
 ## Architecture
 
 ```
@@ -71,11 +83,37 @@ Sampling has three layers. Each layer uses only the layer below it.
 
 `PipelineTable` joins the layers. On each record it fires the due timers, applies the record to its own instrument, and schedules that instrument's next due time. An idle instrument costs nothing per record.
 
+A cross computes columns across all instruments on a time grid. `--cross NAME=PLUGIN:EVERY` runs the cross that `PLUGIN` exports and writes one more table named `NAME`:
+
+```bash
+build/nqhpc run --adapter build/plugins/adapters/synthetic.so \
+                --adapter-param count=100000 --adapter-param instruments=3 \
+                --plugin build/plugins/features/example_cross_features.so \
+                --cross x=example_cross_features:1us
+```
+
+| Class | Job |
+|---|---|
+| `Feature/CrossPanel` | Holds the input and output columns of one cross, one row per instrument, column-major and 64-byte aligned. Tracks the rows that had a record since the last boundary |
+| `Feature/CrossStage` | Owns the clock of one cross. At a boundary it reads the changed instruments, calls the cross, and pushes one block of rows to the sink |
+
+`PipelineTable` fires a cross before the samplers of the same instant, so a sampler row at a boundary sees the cross output of that boundary. A record costs one comparison and one bit per cross. `tests/cross_bench` measures the cost per boundary. A cross reads only snapshot columns.
+
+`ta_ohlcv` exports a cross that ranks and z-scores its 8 snapshot features across instruments. Its cumulative features `ret`, `gap`, `rv` and `gk` get no cross-section; a feature that needs one needs a snapshot twin first. Each instrument row of the sampler table carries the result as `ta_ohlcv.<feature>_rank` and `ta_ohlcv.<feature>_z`. This run reads the lake data that `nqlake mmap` writes from `plugins/adapters/nqlake_ohlcv/mmap.sql`:
+
+```bash
+build/nqhpc run --adapter build/plugins/adapters/nqlake_ohlcv.so \
+                --plugin build/plugins/features/ta_ohlcv.so \
+                --sampler 1h=time:1h --cross xs=ta_ohlcv:1h
+```
+
+The members of a boundary are the instruments with a bar since the last boundary and a value for the feature. A feature with fewer than `cross_min` members, 20 by default, gets NaN rank and z. `cross_min` is set in `ta_ohlcv.params` beside the `.so`.
+
 The `ts` of an OHLCV record is the start of its period. A `time` sampler with the same period writes one row per record, stamped at the end of the period. The `trades` trigger needs an MBO feed.
 
 | Path | Contents |
 |---|---|
 | `src/`, `include/` | the engine |
-| `plugins/` | one example feature plugin and one synthetic adapter per feed, the `nqlake_ohlcv` adapter, the `ta_ohlcv` feature plugin |
+| `plugins/` | one example feature plugin and one synthetic adapter per feed, the `example_cross_features` plugin with a cross, the `nqlake_ohlcv` adapter, the `ta_ohlcv` feature plugin with a cross |
 | `tests/` | one test executable per layer |
 | `shared/` | nlib and [NQCPPSDK](https://github.com/Zhou-London/nqcppsdk), fetched by CMake at the `GIT_TAG` pins |

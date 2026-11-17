@@ -74,6 +74,17 @@ SamplerSpec ParseSamplerSpec(std::string_view text) {
     throw std::invalid_argument("sampler trigger must be time, events, or trades: '" + std::string(trigger) + "'");
 }
 
+CrossArg ParseCrossArg(std::string_view text) {
+    const auto eq = text.find('=');
+    const auto colon = text.rfind(':');
+    if (eq == std::string_view::npos || eq == 0 || colon == std::string_view::npos || colon <= eq + 1 ||
+        colon + 1 == text.size()) {
+        throw std::invalid_argument("cross must be NAME=PLUGIN:EVERY: '" + std::string(text) + "'");
+    }
+    return CrossArg{std::string(text.substr(0, eq)), std::string(text.substr(eq + 1, colon - eq - 1)),
+                    ParseDuration(text.substr(colon + 1))};
+}
+
 KeyValues LoadParamsFile(const std::filesystem::path& path) {
     std::ifstream in(path);
     if (!in) throw std::invalid_argument("cannot open params file: " + path.string());

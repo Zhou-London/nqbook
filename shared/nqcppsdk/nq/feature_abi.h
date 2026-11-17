@@ -62,6 +62,24 @@ typedef struct nq_schema {
     uint8_t feed;
 } nq_schema;
 
+typedef struct nq_cross_panel {
+    int64_t ts;
+    uint32_t nrow;
+    uint32_t stride;
+    const double* in;
+    double* out;
+    const uint64_t* valid;
+    const uint32_t* changed;
+    uint32_t nchanged;
+} nq_cross_panel;
+
+typedef struct nq_cross_schema {
+    uint32_t nin;
+    const char* const* inputs;
+    uint32_t nout;
+    const nq_column* outs;
+} nq_cross_schema;
+
 typedef const nq_schema* (*nq_describe_fn)(void);
 typedef void* (*nq_init_fn)(const nq_params* params);
 typedef void (*nq_destroy_fn)(void* state);
@@ -70,6 +88,12 @@ typedef void (*nq_on_ohlcv_fn)(void* state, const nq_ohlcv* ohlcv);
 typedef void (*nq_read_fn)(void* state, const nq_book_view* book, double* out);
 typedef void (*nq_on_control_fn)(void* state, const nq_control* control);
 
+typedef const nq_cross_schema* (*nq_cross_describe_fn)(void);
+typedef void* (*nq_cross_init_fn)(const nq_params* params);
+typedef void (*nq_cross_destroy_fn)(void* cross);
+typedef void (*nq_cross_apply_fn)(void* cross, const nq_cross_panel* panel);
+typedef void (*nq_cross_bind_fn)(void* state, const double* row, size_t stride);
+
 #define NQ_SYM_DESCRIBE "nq_describe"
 #define NQ_SYM_INIT "nq_init"
 #define NQ_SYM_DESTROY "nq_destroy"
@@ -77,6 +101,11 @@ typedef void (*nq_on_control_fn)(void* state, const nq_control* control);
 #define NQ_SYM_ON_OHLCV "nq_on_ohlcv"
 #define NQ_SYM_READ "nq_read"
 #define NQ_SYM_ON_CONTROL "nq_on_control"
+#define NQ_SYM_CROSS_DESCRIBE "nq_cross_describe"
+#define NQ_SYM_CROSS_INIT "nq_cross_init"
+#define NQ_SYM_CROSS_DESTROY "nq_cross_destroy"
+#define NQ_SYM_CROSS_APPLY "nq_cross_apply"
+#define NQ_SYM_CROSS_BIND "nq_cross_bind"
 
 #ifdef __cplusplus
 }

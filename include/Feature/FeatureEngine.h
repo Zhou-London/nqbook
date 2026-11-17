@@ -33,6 +33,10 @@ public:
     void Close();
 
     std::span<const double> ReadAll();
+    void BindCross(std::size_t plugin, const double* row, std::size_t stride) noexcept {
+        instances_[plugin].BindCross(row, stride);
+    }
+    void WatchCross(const std::uint64_t* epoch) noexcept { cross_epoch_ = epoch; }
 
     const nq::Instrument& GetInstrument() const noexcept { return spec_; }
     const FeatureCatalog& Catalog() const noexcept { return *catalog_; }
@@ -53,6 +57,8 @@ private:
     std::vector<std::size_t> offsets_;
     std::vector<double> values_;
     bool values_fresh_ = false;
+    const std::uint64_t* cross_epoch_ = nullptr;
+    std::uint64_t seen_epoch_ = 0;
     std::vector<std::unique_ptr<Sampler>> samplers_;
 };
 

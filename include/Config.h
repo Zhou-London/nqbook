@@ -19,9 +19,16 @@ struct PluginFile {
     KeyValues params;
 };
 
+struct CrossArg {
+    std::string name;
+    std::string plugin;
+    std::int64_t every = 0;
+};
+
 /* ---------- Parsing Functions ---------- */
 std::int64_t ParseDuration(std::string_view text);
 SamplerSpec ParseSamplerSpec(std::string_view text);
+CrossArg ParseCrossArg(std::string_view text);
     
 KeyValues LoadParamsFile(const std::filesystem::path& path);
 PluginFile DescribePluginFile(const std::filesystem::path& so);

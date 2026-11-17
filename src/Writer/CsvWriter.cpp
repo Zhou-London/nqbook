@@ -51,6 +51,30 @@ std::vector<std::filesystem::path> WriteSamplerCsv(const PipelineTable<Record>& 
         }
         written.push_back(path);
     }
+
+    const auto& crosses = table.Catalog().Crosses();
+    for (std::size_t ci = 0; ci < crosses.size(); ++ci) {
+        const CrossTemplate& t = crosses[ci];
+        const std::filesystem::path path = dir / (t.spec.name + ".csv");
+        std::unique_ptr<std::FILE, int (*)(std::FILE*)> f(std::fopen(path.string().c_str(), "w"), &std::fclose);
+        if (!f) throw std::runtime_error("cannot create " + path.string());
+
+        std::fprintf(f.get(), "instrument,symbol,ts");
+        for (const auto& n : t.names) std::fprintf(f.get(), ",%s", CsvString(n).c_str());
+        std::fprintf(f.get(), "\n");
+
+        for (const FeatureBlock& block : table.Crosses()[ci].Blocks()) {
+            const std::size_t nrow = block.instruments.size();
+            for (std::size_t r = 0; r < nrow; ++r) {
+                const std::uint32_t id = block.instruments[r];
+                const std::string symbol = CsvString(table.Find(id)->Engine().GetInstrument().symbol);
+                std::fprintf(f.get(), "%u,%s,%lld", id, symbol.c_str(), static_cast<long long>(block.ts));
+                for (std::size_t c = 0; c < t.names.size(); ++c) std::fprintf(f.get(), ",%.17g", block.values[c * nrow + r]);
+                std::fprintf(f.get(), "\n");
+            }
+        }
+        written.push_back(path);
+    }
     return written;
 }
 

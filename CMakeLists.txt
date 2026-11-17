@@ -23,7 +23,7 @@ FetchContent_Declare(nlib
 )
 FetchContent_Declare(nqcppsdk
     GIT_REPOSITORY https://github.com/Zhou-London/nqcppsdk.git
-    GIT_TAG v0.2.0
+    GIT_TAG v0.3.0
     GIT_SHALLOW ON
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shared/nqcppsdk
 )
@@ -43,6 +43,8 @@ add_library(nqhpc_core STATIC
     src/Config.cpp
     src/Feature/OrderbookView.cpp
     src/Feature/Sampler.cpp
+    src/Feature/CrossPanel.cpp
+    src/Feature/CrossStage.cpp
     src/Feature/FeatureCatalog.cpp
     src/Feature/FeatureEngine.cpp
     src/PipelineTable.cpp

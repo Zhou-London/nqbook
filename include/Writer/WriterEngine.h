@@ -29,6 +29,8 @@ public:
     void Start();
     void Register(const Instrument& instrument) override;
     void Push(FeatureRow row) override;
+    void Push(FeatureBlock block) override;
+    FeatureBlock Acquire() override;
     void Finish();
     void Abort() noexcept;
 
@@ -40,14 +42,18 @@ public:
     std::uint64_t Stalls() const noexcept { return stalls_.load(std::memory_order_relaxed); }
 
 private:
-    using Message = std::variant<FeatureRow, Instrument>;
+    using Message = std::variant<FeatureRow, Instrument, FeatureBlock>;
+
+    static constexpr std::size_t kSpareBlocks = 64;
 
     bool Enqueue(Message message);
+    void Recycle(FeatureBlock block);
     void Run(std::stop_token st);
     void Fail(const std::string& message);
 
     std::unique_ptr<ParquetWriter> writer_;
     nlib::single_queue<Message> queue_;
+    nlib::single_queue<FeatureBlock> spare_{kSpareBlocks};
     std::atomic<bool> draining_{false};
     std::atomic<bool> failed_{false};
     std::atomic<bool> abort_{false};

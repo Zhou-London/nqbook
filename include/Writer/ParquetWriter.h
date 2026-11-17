@@ -29,6 +29,7 @@ public:
 
     void Register(const Instrument& instrument);
     void Write(const FeatureRow& row);
+    void Write(const FeatureBlock& block);
     void Close();
 
     const std::filesystem::path& Dir() const noexcept { return dir_; }

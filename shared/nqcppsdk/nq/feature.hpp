@@ -64,6 +64,14 @@ struct Control {
     }
 };
 
+struct CrossRow {
+    const double* row = nullptr;
+    std::size_t stride = 0;
+
+    constexpr explicit operator bool() const noexcept { return row != nullptr; }
+    constexpr double operator[](std::size_t column) const noexcept { return row[column * stride]; }
+};
+
 using Column = nq_column;
 
 inline constexpr std::uint8_t kSnapshot = NQ_COLUMN_SNAPSHOT;
@@ -94,6 +102,7 @@ struct FeatureBase {
     void OnEvent(const Event&, const BookView&) noexcept {}
     void OnOhlcv(const Ohlcv&) noexcept {}
     void OnControl(const Control&) noexcept {}
+    void BindCross(CrossRow) noexcept {}
 };
 
 namespace detail {
@@ -205,6 +214,13 @@ public:
 
     void OnControl(const Control& c) noexcept {
         std::apply([&](auto&... f) { (f.OnControl(c), ...); }, features_);
+    }
+
+    void BindCross(CrossRow row) noexcept {
+        const auto bind = [&](auto& f) {
+            if constexpr (requires { f.BindCross(row); }) f.BindCross(row);
+        };
+        std::apply([&](auto&... f) { (bind(f), ...); }, features_);
     }
 
     template <std::size_t I>

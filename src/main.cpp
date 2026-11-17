@@ -59,6 +59,7 @@ struct PluginOptions {
     std::vector<std::string> plugins;
     std::string plugin_dir;
     std::vector<std::string> samplers;
+    std::vector<std::string> crosses;
     bool fill_gaps = false;
 };
 
@@ -78,7 +79,8 @@ void AddPluginOptions(CLI::App* cmd, PluginOptions& opt) {
     cmd->add_option("--plugin", opt.plugins, "Plugin .so to load, in order; repeatable")->check(CLI::ExistingFile);
     cmd->add_option("--plugin-dir", opt.plugin_dir, "Directory whose *.so are loaded in filename order")->check(CLI::ExistingDirectory);
     cmd->add_option("--sampler", opt.samplers, "NAME=TRIGGER:EVERY, e.g. 1s=time:1s, fast=events:100, t=trades:1 (trades needs an MBO feed); repeatable");
-    cmd->add_flag("--fill-gaps", opt.fill_gaps, "Time samplers emit a row for every empty bar");
+    cmd->add_option("--cross", opt.crosses, "NAME=PLUGIN:EVERY, e.g. x=example_cross_features:1s, runs that plugin's cross on a time grid; repeatable");
+    cmd->add_flag("--fill-gaps", opt.fill_gaps, "Time samplers and crosses emit rows for every empty bar");
 }
 
 void AddAdapterOptions(CLI::App* cmd, AdapterOptions& opt) {
@@ -104,6 +106,11 @@ int LoadCatalog(const PluginOptions& opt, nq::FeatureCatalog& catalog) {
             }
         })) return rc;
 
+    std::vector<nq::CrossArg> crosses;
+    if (int rc = Attempt(kSamplerInvalid, [&] {
+            for (const auto& c : opt.crosses) crosses.push_back(nq::ParseCrossArg(c));
+        })) return rc;
+
     std::vector<nq::PluginFile> files;
     if (int rc = Attempt(kParamsInvalid, [&] {
             for (const auto& p : opt.plugins) files.push_back(nq::DescribePluginFile(p));
@@ -118,6 +125,7 @@ int LoadCatalog(const PluginOptions& opt, nq::FeatureCatalog& catalog) {
 
     return Attempt(kSamplerInvalid, [&] {
         for (auto& spec : specs) catalog.AddSampler(std::move(spec));
+        for (auto& c : crosses) catalog.AddCross(std::move(c.name), c.plugin, c.every, opt.fill_gaps);
     });
 }
 
@@ -144,7 +152,10 @@ int Check(const PluginOptions& popt, const std::string& format) {
     nq::FeatureCatalog catalog;
     if (int rc = LoadCatalog(popt, catalog)) return rc;
 
-    if (int rc = Attempt(kPluginInit, [&] { nq::FeatureEngine probe(catalog, nq::Instrument{0, "probe", 1, 1}); })) return rc;
+    if (int rc = Attempt(kPluginInit, [&] {
+            nq::FeatureEngine probe(catalog, nq::Instrument{0, "probe", 1, 1});
+            for (const auto& c : catalog.Crosses()) c.spec.make();
+        })) return rc;
 
     if (format == "json") nq::PrintCatalogJson(stdout, catalog);
     else nq::PrintCatalogText(stdout, catalog);

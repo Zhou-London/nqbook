@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include <nq/feature.hpp>
+#include <nq/cross.hpp>
 
 namespace nq_ta {
 
@@ -112,9 +112,38 @@ private:
     std::array<Slot, kHoursPerDay> slots_{};
 };
 
+inline constexpr std::size_t kSeries = 12;
+
+inline constexpr auto kCrossColumns = nq::MakeColumns({
+    {"natr_rank", "rank", "rank of natr across the instruments at the boundary, 0 to 1"},
+    {"natr_z", "sd", "z-score of natr across the instruments at the boundary, 0 when all are equal"},
+    {"ema_dev_rank", "rank", "rank of ema_dev across the instruments at the boundary, 0 to 1"},
+    {"ema_dev_z", "sd", "z-score of ema_dev across the instruments at the boundary, 0 when all are equal"},
+    {"adx_rank", "rank", "rank of adx across the instruments at the boundary, 0 to 1"},
+    {"adx_z", "sd", "z-score of adx across the instruments at the boundary, 0 when all are equal"},
+    {"donchian_pos_rank", "rank", "rank of donchian_pos across the instruments at the boundary, 0 to 1"},
+    {"donchian_pos_z", "sd", "z-score of donchian_pos across the instruments at the boundary, 0 when all are equal"},
+    {"rsi_rank", "rank", "rank of rsi across the instruments at the boundary, 0 to 1"},
+    {"rsi_z", "sd", "z-score of rsi across the instruments at the boundary, 0 when all are equal"},
+    {"clv_rank", "rank", "rank of clv across the instruments at the boundary, 0 to 1"},
+    {"clv_z", "sd", "z-score of clv across the instruments at the boundary, 0 when all are equal"},
+    {"range_atr_rank", "rank", "rank of range_atr across the instruments at the boundary, 0 to 1"},
+    {"range_atr_z", "sd", "z-score of range_atr across the instruments at the boundary, 0 when all are equal"},
+    {"rvol_rank", "rank", "rank of rvol across the instruments at the boundary, 0 to 1"},
+    {"rvol_z", "sd", "z-score of rvol across the instruments at the boundary, 0 when all are equal"},
+});
+
+template <std::size_t A, std::size_t B>
+constexpr std::array<nq::Column, A + B> Join(const std::array<nq::Column, A>& a, const std::array<nq::Column, B>& b) {
+    std::array<nq::Column, A + B> out{};
+    std::copy(a.begin(), a.end(), out.begin());
+    std::copy(b.begin(), b.end(), out.begin() + A);
+    return out;
+}
+
 class TechnicalAnalysis : public nq::FeatureBase {
 public:
-    static constexpr auto kColumns = nq::MakeColumns({
+    static constexpr auto kColumns = Join(nq::MakeColumns({
         {"ret", "log", "close-to-close log return", nq::kCumulative},
         {"gap", "log", "log return from the previous close to the open", nq::kCumulative},
         {"rv", "var", "squared close-to-close log return", nq::kCumulative},
@@ -127,7 +156,7 @@ public:
         {"clv", "ratio", "position of close between low and high of the last record, 0 to 1"},
         {"range_atr", "atr", "true range of the last record over the average true range before it"},
         {"rvol", "ratio", "volume over the mean volume of the same Eastern hour on earlier days"},
-    });
+    }), kCrossColumns);
 
     static constexpr int kRthFirstHour = 9;
     static constexpr int kRthLastHour = 15;
@@ -196,7 +225,10 @@ public:
         out[9] = clv_;
         out[10] = range_atr_;
         out[11] = rvol_;
+        for (std::size_t c = 0; c < kCrossColumns.size(); ++c) out[kSeries + c] = cross_ ? cross_[c] : kNaN;
     }
+
+    void BindCross(nq::CrossRow row) noexcept { cross_ = row; }
 
 private:
     static std::int64_t Period(const nq::Params& p, const char* key, std::int64_t fallback) {
@@ -220,6 +252,7 @@ private:
 
     double scale_;
     bool rth_only_;
+    nq::CrossRow cross_;
     SmoothedAverage atr_;
     SmoothedAverage ema_;
     SmoothedAverage plus_dm_;
@@ -242,6 +275,65 @@ private:
     double rvol_ = kNaN;
 };
 
+class TechnicalCross {
+public:
+    static constexpr auto kInputs =
+        nq::MakeInputs({"natr", "ema_dev", "adx", "donchian_pos", "rsi", "clv", "range_atr", "rvol"});
+    static constexpr auto kColumns = kCrossColumns;
+
+    explicit TechnicalCross(const nq::Params& p) : min_members_(p.GetInt("cross_min", 20)) {
+        if (min_members_ < 2) throw std::invalid_argument("cross_min must be at least 2");
+    }
+
+    void Apply(const nq::CrossView& view) noexcept {
+        const std::size_t nrow = view.RowCount();
+        for (std::size_t c = 0; c < kColumns.size(); ++c) std::fill_n(view.Out(c).begin(), nrow, kNaN);
+
+        for (std::size_t s = 0; s < kInputs.size(); ++s) {
+            entries_.clear();
+            const std::span<const double> in = view.In(s);
+            for (const std::uint32_t row : view.Changed()) {
+                if (std::isfinite(in[row])) entries_.push_back({in[row], row});
+            }
+            if (static_cast<std::int64_t>(entries_.size()) >= min_members_) {
+                Write(view.Out(2 * s), view.Out(2 * s + 1));
+            }
+        }
+    }
+
+private:
+    struct Entry {
+        double value;
+        std::uint32_t row;
+    };
+
+    void Write(std::span<double> rank, std::span<double> z) noexcept {
+        const std::size_t n = entries_.size();
+        double sum = 0.0;
+        for (const Entry& e : entries_) sum += e.value;
+        const double mean = sum / static_cast<double>(n);
+        double square = 0.0;
+        for (const Entry& e : entries_) square += (e.value - mean) * (e.value - mean);
+        const double sd = std::sqrt(square / static_cast<double>(n));
+        std::sort(entries_.begin(), entries_.end(), [](const Entry& a, const Entry& b) { return a.value < b.value; });
+        // Rounding in the mean can leave sd a few ulps above 0 when all values are equal.
+        const bool equal = entries_.front().value == entries_.back().value;
+        for (const Entry& e : entries_) z[e.row] = equal ? 0.0 : (e.value - mean) / sd;
+
+        for (std::size_t first = 0; first < n;) {
+            std::size_t last = first;
+            while (last + 1 < n && entries_[last + 1].value == entries_[first].value) ++last;
+            const double scaled = 0.5 * static_cast<double>(first + last) / static_cast<double>(n - 1);
+            for (std::size_t i = first; i <= last; ++i) rank[entries_[i].row] = scaled;
+            first = last + 1;
+        }
+    }
+
+    std::int64_t min_members_;
+    std::vector<Entry> entries_;
+};
+
 }  // namespace nq_ta
 
 NQ_OHLCV_PLUGIN(nq_ta::TechnicalAnalysis)
+NQ_CROSS(nq_ta::TechnicalCross)

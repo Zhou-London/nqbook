@@ -11,6 +11,13 @@ PipelineTable<Record>::PipelineTable(const FeatureCatalog& catalog, Resolver res
     : catalog_(&catalog), resolver_(std::move(resolver)), options_(options), sink_(sink) {
     entries_.resize(instrument_slots);
     for (std::size_t i = 0; i < entries_.size(); ++i) entries_[i].id = static_cast<std::uint32_t>(i);
+
+    const std::size_t first_table = catalog.Samplers().size();
+    crosses_.reserve(catalog.Crosses().size());
+    for (std::size_t i = 0; i < catalog.Crosses().size(); ++i) {
+        crosses_.emplace_back(catalog.Crosses()[i], static_cast<std::uint32_t>(first_table + i), sink,
+                              &cross_epoch_);
+    }
 }
 
 template <class Record>
@@ -32,6 +39,10 @@ typename PipelineTable<Record>::Entry& PipelineTable<Record>::Resolve(std::uint3
     entry.pipeline = std::make_unique<Pipeline<Record>>(*catalog_, std::move(*spec), options_, sink_);
     entry.live_index = static_cast<std::uint32_t>(live_.size());
     live_.push_back(entry.pipeline.get());
+    engines_.push_back(&entry.pipeline->Engine());
+    live_ids_.push_back(instrument);
+    if (!crosses_.empty()) entry.pipeline->Engine().WatchCross(&cross_epoch_);
+    for (CrossStage& c : crosses_) c.Attach(entry.live_index, engines_);
     return entry;
 }
 
@@ -49,6 +60,9 @@ void PipelineTable<Record>::Apply(const Record& record) {
     e.stats.last_ts = record.ts;
     ++e.stats.events;
 
+    for (CrossStage& c : crosses_) {
+        if (record.ts >= c.Due()) c.Advance(record.ts, engines_, live_ids_);
+    }
     timers_.AdvanceTo(record.ts, [&](std::uint32_t key) {
         FeatureEngine& woken = live_[key]->Engine();
         woken.Advance(record.ts);
@@ -58,10 +72,12 @@ void PipelineTable<Record>::Apply(const Record& record) {
     engine.Advance(record.ts);
     e.pipeline->Apply(record);
     timers_.WakeBy(e.live_index, engine.Due());
+    for (CrossStage& c : crosses_) c.Touch(e.live_index);
 }
 
 template <class Record>
 void PipelineTable<Record>::Close() {
+    for (CrossStage& c : crosses_) c.Close(engines_, live_ids_);
     for (Pipeline<Record>* p : live_) p->Close();
 }
 

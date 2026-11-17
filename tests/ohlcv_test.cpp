@@ -3,6 +3,7 @@
 #include <numbers>
 #include <optional>
 #include <stdexcept>
+#include <vector>
 
 #include <nq/adapter_host.hpp>
 #include <nq/params.hpp>
@@ -150,7 +151,9 @@ static int TestFeedRules() {
 static int TestTechnicalAnalysis() {
     nq::FeatureCatalog catalog;
     catalog.LoadPlugin(NQ_TA_OHLCV_PATH, "ta");
-    CHECK(catalog.Columns().size() == 12 && catalog.Columns()[0].name == "ta.ret" && catalog.Columns()[11].name == "ta.rvol");
+    CHECK(catalog.Columns().size() == 28 && catalog.Columns()[0].name == "ta.ret" && catalog.Columns()[11].name == "ta.rvol");
+    CHECK(catalog.Columns()[12].name == "ta.natr_rank" && catalog.Columns()[13].name == "ta.natr_z");
+    CHECK(catalog.Columns()[27].name == "ta.rvol_z" && catalog.Columns()[27].kind == NQ_COLUMN_SNAPSHOT);
     catalog.AddSampler(nq::SamplerSpec::Events("each", 1));
 
     nq::Pipeline<nq_ohlcv> pipe(catalog, nq::Instrument{0, "TEST", 1, 1});
@@ -188,12 +191,95 @@ static int TestTechnicalAnalysis() {
     return 0;
 }
 
+static std::optional<nq::Instrument> ResolveCross(std::uint32_t id) {
+    static const char* const kSymbols[] = {"AAA", "BBB", "CCC", "DDD", "QQQ"};
+    if (id < 1 || id > 5) return std::nullopt;
+    return nq::Instrument{id, kSymbols[id - 1], 1, 1};
+}
+
+static nq_ohlcv ClvBar(std::int64_t ts, std::uint32_t instrument, double close) {
+    return Ohlcv(ts, instrument, 100, 110, 90, close, 1);
+}
+
+static std::vector<double> ZScores(const std::vector<double>& x) {
+    double mean = 0.0;
+    for (const double v : x) mean += v / static_cast<double>(x.size());
+    double var = 0.0;
+    for (const double v : x) var += (v - mean) * (v - mean) / static_cast<double>(x.size());
+    std::vector<double> z;
+    for (const double v : x) z.push_back((v - mean) / std::sqrt(var));
+    return z;
+}
+
+static int TestTechnicalCross() {
+    constexpr std::int64_t kHour = 60 * kMin;
+    constexpr std::size_t kClv = 9, kNatrRank = 12, kNatrZ = 13, kClvRank = 22, kClvZ = 23;
+
+    nq::FeatureCatalog catalog;
+    catalog.LoadPlugin(NQ_TA_OHLCV_PATH, "ta", {{"cross_min", "3"}});
+    catalog.AddSampler(nq::SamplerSpec::Time("1h", kHour));
+    catalog.AddCross("xs", "ta", kHour);
+    const nq::CrossTemplate& t = catalog.Crosses()[0];
+    CHECK(t.names.size() == 24 && t.names[0] == "ta.natr" && t.names[7] == "ta.rvol" && t.names[8] == "xs.natr_rank");
+
+    nq::PipelineTable<nq_ohlcv> table(catalog, &ResolveCross);
+    const double hour0[] = {95, 100, 105, 110, 100};
+    for (std::uint32_t id = 1; id <= 5; ++id) table.Apply(ClvBar(0, id, hour0[id - 1]));
+    table.Apply(ClvBar(kHour, 1, 110));
+    table.Apply(ClvBar(kHour, 2, 90));
+    table.Apply(ClvBar(kHour, 3, 100));
+    table.Apply(ClvBar(2 * kHour, 1, 100));
+    table.Apply(ClvBar(2 * kHour, 2, 100));
+    CHECK(std::isnan(table.Find(4)->Engine().ReadAll()[kClvRank]));
+    // Every instrument gets the same bar, so clv is 5/11 for all of them.
+    for (std::uint32_t id = 1; id <= 5; ++id) table.Apply(Ohlcv(3 * kHour, id, 95, 101, 90, 95, 1));
+    table.Close();
+
+    const nq::RowBuffer& a = table.Find(1)->Engine().GetSampler(0).Rows();
+    const nq::RowBuffer& b = table.Find(2)->Engine().GetSampler(0).Rows();
+    const nq::RowBuffer& c = table.Find(3)->Engine().GetSampler(0).Rows();
+    const nq::RowBuffer& d = table.Find(4)->Engine().GetSampler(0).Rows();
+    const nq::RowBuffer& q = table.Find(5)->Engine().GetSampler(0).Rows();
+    CHECK(a.RowCount() == 4 && b.RowCount() == 4 && c.RowCount() == 3 && d.RowCount() == 2 && q.RowCount() == 2);
+
+    // At 1h all five are in the cross-section, QQQ too. BBB and QQQ tie at the average rank.
+    const std::vector<double> z1 = ZScores({0.25, 0.5, 0.75, 1.0, 0.5});
+    CHECK(a.Ts(0) == kHour && Near(a.At(0, kClv), 0.25) && Near(a.At(0, kClvRank), 0.0) && Near(a.At(0, kClvZ), z1[0]));
+    CHECK(Near(b.At(0, kClvRank), 0.375) && Near(b.At(0, kClvZ), z1[1]));
+    CHECK(Near(c.At(0, kClvRank), 0.75) && Near(c.At(0, kClvZ), z1[2]));
+    CHECK(Near(d.At(0, kClvRank), 1.0) && Near(d.At(0, kClvZ), z1[3]));
+    CHECK(Near(q.At(0, kClvRank), 0.375) && Near(q.At(0, kClvZ), z1[4]));
+    // natr is NaN while the average true range warms up, so it has no cross-section.
+    CHECK(std::isnan(a.At(0, 4)) && std::isnan(a.At(0, kNatrRank)) && std::isnan(a.At(0, kNatrZ)));
+
+    // At 2h only AAA, BBB and CCC have a bar. DDD and QQQ keep their 1h values but stay out.
+    const std::vector<double> z2 = ZScores({1.0, 0.0, 0.5});
+    CHECK(a.Ts(1) == 2 * kHour && Near(a.At(1, kClvRank), 1.0) && Near(a.At(1, kClvZ), z2[0]));
+    CHECK(Near(b.At(1, kClvRank), 0.0) && Near(b.At(1, kClvZ), z2[1]));
+    CHECK(Near(c.At(1, kClvRank), 0.5) && Near(c.At(1, kClvZ), z2[2]));
+    const auto& blocks = table.Crosses()[0].Blocks();
+    CHECK(blocks.size() == 4 && blocks[1].ts == 2 * kHour);
+    CHECK(blocks[1].instruments == (std::vector<std::uint32_t>{1, 2, 3}));
+
+    // At 3h only AAA and BBB have a bar, below cross_min 3.
+    CHECK(a.Ts(2) == 3 * kHour && std::isnan(a.At(2, kClvRank)) && std::isnan(a.At(2, kClvZ)));
+    CHECK(std::isnan(b.At(2, kClvRank)) && Near(b.At(2, kClv), 0.5));
+
+    // At 4h the equal clv values tie at rank 0.5 with z exactly 0, though their mean is off by rounding.
+    for (const nq::RowBuffer* rows : {&a, &b, &c, &d, &q}) {
+        const std::size_t last = rows->RowCount() - 1;
+        CHECK(rows->Ts(last) == 4 * kHour && Near(rows->At(last, kClvRank), 0.5) && rows->At(last, kClvZ) == 0.0);
+    }
+    return 0;
+}
+
 int main() {
     if (int r = TestPipeline()) return r;
     if (int r = TestTable()) return r;
     if (int r = TestSession()) return r;
     if (int r = TestFeedRules()) return r;
     if (int r = TestTechnicalAnalysis()) return r;
+    if (int r = TestTechnicalCross()) return r;
     std::printf("ok\n");
     return 0;
 }

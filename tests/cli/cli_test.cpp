@@ -127,6 +127,36 @@ static int TestCli(const fs::path& tmp) {
     r = Run(base + "--plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --format json", tmp);
     CHECK(r.code == 0);
     CHECK(Has(r.out, "\"name\": \"example_features\"") && Has(r.out, "\"kind\": \"cumulative\"") && Has(r.out, "\"samplers\": [\n  ]"));
+    CHECK(Has(r.out, "\"crosses\": [\n  ]"));
+
+    const std::string cross = "--plugin " + Quote(NQ_EXAMPLE_CROSS_FEATURES_PATH);
+    r = Run(base + cross + " --cross x=example_cross_features:1s --fill-gaps", tmp);
+    CHECK(r.code == 0 && Has(r.out, "crosses (1)"));
+    CHECK(Has(r.out, "x                example_cross_features every=1000000000ns fill_gaps=yes inputs=1 cols=4"));
+    r = Run(base + cross + " --cross x=example_cross_features:1s --format json", tmp);
+    CHECK(r.code == 0 && Has(r.out, "\"plugin\": \"example_cross_features\"") && Has(r.out, "\"x.rank\""));
+    r = Run(base + cross + " --cross bad", tmp);
+    CHECK(r.code == 5 && Has(r.err, "NAME=PLUGIN:EVERY"));
+    r = Run(base + cross + " --cross x=nope:1s", tmp);
+    CHECK(r.code == 5 && Has(r.err, "unknown plugin"));
+    r = Run(base + "--plugin " + Quote(NQ_EXAMPLE_FEATURES_PATH) + " --cross x=example_features:1s", tmp);
+    CHECK(r.code == 5 && Has(r.err, "has no cross"));
+    r = Run(base + cross + " --sampler x=time:1s --cross x=example_cross_features:1s", tmp);
+    CHECK(r.code == 5 && Has(r.err, "duplicate sampler name"));
+
+    const std::string feed = "run --adapter " + Quote(NQ_SYNTHETIC_ADAPTER_PATH) + " --adapter-param count=60 --adapter-param instruments=3 ";
+    const fs::path xcsv = tmp / "xcsv";
+    r = Run(feed + cross + " --cross x=example_cross_features:10ns --out-format csv --out-dir " + Quote(xcsv), tmp);
+    CHECK(r.code == 0 && fs::exists(xcsv / "x.csv"));
+    {
+        std::ifstream in(xcsv / "x.csv");
+        std::string header;
+        std::getline(in, header);
+        CHECK(header == "instrument,symbol,ts,example_cross_features.mid,x.mean,x.z,x.rank");
+    }
+    const fs::path xpq = tmp / "xpq";
+    r = Run(feed + cross + " --cross x=example_cross_features:10ns --out-dir " + Quote(xpq), tmp);
+    CHECK(r.code == 0 && !Has(r.err, "error=") && ParquetRows(xpq / "x.parquet") == 19);
 
     r = Run(base + "--plugin " + Quote(NQ_FAKE_PLUGIN_PATH), tmp);
     CHECK(r.code == 3 && Has(r.err, "abi hash mismatch"));

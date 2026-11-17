@@ -25,6 +25,11 @@ struct PluginFns {
     nq_on_ohlcv_fn on_ohlcv = nullptr;
     nq_read_fn read = nullptr;
     nq_on_control_fn on_control = nullptr;
+    nq_cross_describe_fn cross_describe = nullptr;
+    nq_cross_init_fn cross_init = nullptr;
+    nq_cross_destroy_fn cross_destroy = nullptr;
+    nq_cross_apply_fn cross_apply = nullptr;
+    nq_cross_bind_fn cross_bind = nullptr;
 };
 
 class PluginInstance {
@@ -66,6 +71,10 @@ public:
 
     void OnControl(const nq_control& c) noexcept { fns_.on_control(state_, &c); }
 
+    void BindCross(const double* row, std::size_t stride) noexcept {
+        if (fns_.cross_bind) fns_.cross_bind(state_, row, stride);
+    }
+
     void* Raw() noexcept { return state_; }
 
 private:
@@ -79,6 +88,42 @@ private:
     void* state_;
     PluginFns fns_;
     const nq_schema* schema_;
+};
+
+class CrossInstance {
+public:
+    CrossInstance(void* state, const PluginFns& fns) noexcept : state_(state), fns_(fns) {}
+
+    ~CrossInstance() { Release(); }
+
+    CrossInstance(const CrossInstance&) = delete;
+    CrossInstance& operator=(const CrossInstance&) = delete;
+
+    CrossInstance(CrossInstance&& other) noexcept : state_(std::exchange(other.state_, nullptr)), fns_(other.fns_) {}
+
+    CrossInstance& operator=(CrossInstance&& other) noexcept {
+        if (this != &other) {
+            Release();
+            state_ = std::exchange(other.state_, nullptr);
+            fns_ = other.fns_;
+        }
+        return *this;
+    }
+
+    void Apply(const nq_cross_panel& panel) noexcept { fns_.cross_apply(state_, &panel); }
+
+    void* Raw() noexcept { return state_; }
+
+private:
+    void Release() noexcept {
+        if (state_) {
+            fns_.cross_destroy(state_);
+            state_ = nullptr;
+        }
+    }
+
+    void* state_;
+    PluginFns fns_;
 };
 
 class Plugin {
@@ -106,6 +151,21 @@ public:
             } else {
                 throw PluginLoadError("schema has an unknown feed: " + path);
             }
+            fns_.cross_describe = Find<nq_cross_describe_fn>(NQ_SYM_CROSS_DESCRIBE);
+            if (fns_.cross_describe) {
+                fns_.cross_init = Resolve<nq_cross_init_fn>(NQ_SYM_CROSS_INIT);
+                fns_.cross_destroy = Resolve<nq_cross_destroy_fn>(NQ_SYM_CROSS_DESTROY);
+                fns_.cross_apply = Resolve<nq_cross_apply_fn>(NQ_SYM_CROSS_APPLY);
+                fns_.cross_bind = Find<nq_cross_bind_fn>(NQ_SYM_CROSS_BIND);
+                cross_schema_ = fns_.cross_describe();
+                if (!cross_schema_) throw PluginLoadError("nq_cross_describe returned null: " + path);
+                if (cross_schema_->nin == 0 || !cross_schema_->inputs) {
+                    throw PluginLoadError("cross schema has no inputs: " + path);
+                }
+                if (cross_schema_->nout == 0 || !cross_schema_->outs) {
+                    throw PluginLoadError("cross schema has no columns: " + path);
+                }
+            }
         } catch (...) {
             ::dlclose(handle_);
             handle_ = nullptr;
@@ -124,7 +184,8 @@ public:
         : path_(std::move(other.path_)),
           handle_(std::exchange(other.handle_, nullptr)),
           fns_(other.fns_),
-          schema_(other.schema_) {}
+          schema_(other.schema_),
+          cross_schema_(other.cross_schema_) {}
 
     Plugin& operator=(Plugin&& other) noexcept {
         if (this != &other) {
@@ -133,6 +194,7 @@ public:
             handle_ = std::exchange(other.handle_, nullptr);
             fns_ = other.fns_;
             schema_ = other.schema_;
+            cross_schema_ = other.cross_schema_;
         }
         return *this;
     }
@@ -151,7 +213,30 @@ public:
         return PluginInstance(state, fns_, schema_);
     }
 
+    bool HasCross() const noexcept { return cross_schema_ != nullptr; }
+    const nq_cross_schema& CrossSchema() const noexcept { return *cross_schema_; }
+
+    std::span<const char* const> CrossInputs() const noexcept {
+        return std::span<const char* const>(cross_schema_->inputs, cross_schema_->nin);
+    }
+
+    std::span<const nq_column> CrossColumns() const noexcept {
+        return std::span<const nq_column>(cross_schema_->outs, cross_schema_->nout);
+    }
+
+    CrossInstance CreateCross(const nq_params& params) const {
+        if (!cross_schema_) throw PluginInitError("plugin has no cross: " + path_);
+        void* state = fns_.cross_init(&params);
+        if (!state) throw PluginInitError("nq_cross_init failed: " + path_);
+        return CrossInstance(state, fns_);
+    }
+
 private:
+    template <class Fn>
+    Fn Find(const char* name) const noexcept {
+        return reinterpret_cast<Fn>(::dlsym(handle_, name));
+    }
+
     template <class Fn>
     Fn Resolve(const char* name) const {
         void* sym = ::dlsym(handle_, name);
@@ -175,6 +260,7 @@ private:
     void* handle_ = nullptr;
     PluginFns fns_;
     const nq_schema* schema_ = nullptr;
+    const nq_cross_schema* cross_schema_ = nullptr;
 };
 
 }  // namespace nq::host

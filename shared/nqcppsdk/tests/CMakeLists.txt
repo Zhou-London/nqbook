@@ -23,3 +23,15 @@ target_compile_definitions(adapter_test PRIVATE
 )
 add_dependencies(adapter_test sdk_test_plugin sdk_test_adapter sdk_test_ohlcv_adapter)
 add_test(NAME adapter_test COMMAND adapter_test)
+
+nq_add_plugin(sdk_test_cross_plugin test_cross_plugin.cpp)
+
+add_executable(cross_test cross_test.cpp)
+target_link_libraries(cross_test PRIVATE nqcppsdk::nqcppsdk ${CMAKE_DL_LIBS})
+target_compile_options(cross_test PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(cross_test PRIVATE
+    NQ_TEST_PLUGIN_PATH="$<TARGET_FILE:sdk_test_plugin>"
+    NQ_TEST_CROSS_PLUGIN_PATH="$<TARGET_FILE:sdk_test_cross_plugin>"
+)
+add_dependencies(cross_test sdk_test_plugin sdk_test_cross_plugin)
+add_test(NAME cross_test COMMAND cross_test)
