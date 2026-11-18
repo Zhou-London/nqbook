@@ -56,6 +56,7 @@ struct Mbo {
 
 struct AdapterBase {
     const Instrument* FindInstrument(std::uint32_t) const noexcept { return nullptr; }
+    Next Warmup(Ohlcv&) { return Next::End; }
 };
 
 namespace detail {
@@ -63,9 +64,10 @@ namespace detail {
 template <class A>
 concept AdapterCore =
     std::is_constructible_v<A, const Params&> &&
-    requires(const A& ca, std::uint32_t id) {
+    requires(A& a, const A& ca, std::uint32_t id, Ohlcv& warmup) {
         { A::kName } -> std::convertible_to<const char*>;
         { ca.FindInstrument(id) } noexcept -> std::convertible_to<const Instrument*>;
+        { a.Warmup(warmup) } -> std::same_as<Next>;
     };
 
 }  // namespace detail
@@ -123,6 +125,13 @@ int NextRaw(A& adapter, nq_ohlcv& out) {
     NQ_EXPORT int next_symbol(void* s, raw_record* out) {                                       \
         try {                                                                                   \
             return ::nq::detail::NextRaw(*static_cast<Type*>(s), *out);                         \
+        } catch (...) {                                                                         \
+            return NQ_NEXT_ERROR;                                                               \
+        }                                                                                       \
+    }                                                                                           \
+    NQ_EXPORT int nq_adapter_warmup(void* s, nq_ohlcv* out) {                                   \
+        try {                                                                                   \
+            return static_cast<int>(static_cast<Type*>(s)->Warmup(*out));                       \
         } catch (...) {                                                                         \
             return NQ_NEXT_ERROR;                                                               \
         }                                                                                       \

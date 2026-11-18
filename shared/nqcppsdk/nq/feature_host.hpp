@@ -25,6 +25,7 @@ struct PluginFns {
     nq_on_ohlcv_fn on_ohlcv = nullptr;
     nq_read_fn read = nullptr;
     nq_on_control_fn on_control = nullptr;
+    nq_on_warmup_fn on_warmup = nullptr;
     nq_cross_describe_fn cross_describe = nullptr;
     nq_cross_init_fn cross_init = nullptr;
     nq_cross_destroy_fn cross_destroy = nullptr;
@@ -63,6 +64,10 @@ public:
     }
 
     void OnOhlcv(const nq_ohlcv& ohlcv) noexcept { fns_.on_ohlcv(state_, &ohlcv); }
+
+    void OnWarmup(const nq_ohlcv& ohlcv) noexcept {
+        if (fns_.on_warmup) fns_.on_warmup(state_, &ohlcv);
+    }
 
     void Read(std::span<double> out, const nq_book_view* book) {
         if (out.size() < schema_->ncol) throw std::length_error("nq::host::PluginInstance::Read: output too small");
@@ -137,6 +142,7 @@ public:
             fns_.destroy = Resolve<nq_destroy_fn>(NQ_SYM_DESTROY);
             fns_.read = Resolve<nq_read_fn>(NQ_SYM_READ);
             fns_.on_control = Resolve<nq_on_control_fn>(NQ_SYM_ON_CONTROL);
+            fns_.on_warmup = Find<nq_on_warmup_fn>(NQ_SYM_ON_WARMUP);
             schema_ = fns_.describe();
             if (!schema_) throw PluginLoadError("nq_describe returned null: " + path);
             if (schema_->abi_hash != NQ_ABI_HASH) {

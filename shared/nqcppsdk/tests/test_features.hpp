@@ -73,6 +73,30 @@ private:
     std::int64_t trades_ = 0;
 };
 
+struct PriorClose : nq::FeatureBase {
+    static constexpr auto kColumns = nq::MakeColumns({
+        {"prior_close", "price", "close of the last warm-up bar"},
+        {"warm_bars", "count", "warm-up bars received"},
+    });
+
+    explicit PriorClose(const nq::Params& p) : scale_(static_cast<double>(p.PriceScale())) {}
+
+    void OnWarmup(const nq::Ohlcv& ohlcv) noexcept {
+        close_ = static_cast<double>(ohlcv.close) / scale_;
+        ++bars_;
+    }
+
+    void Read(std::span<double> out, const nq::BookView&) const noexcept {
+        out[0] = close_;
+        out[1] = static_cast<double>(bars_);
+    }
+
+private:
+    double scale_;
+    double close_ = std::numeric_limits<double>::quiet_NaN();
+    std::int64_t bars_ = 0;
+};
+
 struct Candle : nq::FeatureBase {
     static constexpr auto kColumns = nq::MakeColumns({
         {"close", "price", "close of the last record"},

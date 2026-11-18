@@ -108,6 +108,12 @@ public:
         for (const auto& ohlcv : ohlcvs) Feed(ohlcv);
     }
 
+    void Warmup(const nq_ohlcv& ohlcv) noexcept { bundle_.OnWarmup(ohlcv); }
+
+    void Warmup(std::span<const nq_ohlcv> ohlcvs) noexcept {
+        for (const auto& ohlcv : ohlcvs) Warmup(ohlcv);
+    }
+
     void Control(ControlType type, std::int64_t ts) noexcept {
         bundle_.OnControl(nq::Control(type, ts));
     }

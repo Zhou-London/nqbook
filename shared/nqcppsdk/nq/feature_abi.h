@@ -85,6 +85,7 @@ typedef void* (*nq_init_fn)(const nq_params* params);
 typedef void (*nq_destroy_fn)(void* state);
 typedef void (*nq_on_event_fn)(void* state, const nq_event* event, const nq_book_view* book);
 typedef void (*nq_on_ohlcv_fn)(void* state, const nq_ohlcv* ohlcv);
+typedef void (*nq_on_warmup_fn)(void* state, const nq_ohlcv* ohlcv);
 typedef void (*nq_read_fn)(void* state, const nq_book_view* book, double* out);
 typedef void (*nq_on_control_fn)(void* state, const nq_control* control);
 
@@ -99,6 +100,7 @@ typedef void (*nq_cross_bind_fn)(void* state, const double* row, size_t stride);
 #define NQ_SYM_DESTROY "nq_destroy"
 #define NQ_SYM_ON_EVENT "nq_on_event"
 #define NQ_SYM_ON_OHLCV "nq_on_ohlcv"
+#define NQ_SYM_ON_WARMUP "nq_on_warmup"
 #define NQ_SYM_READ "nq_read"
 #define NQ_SYM_ON_CONTROL "nq_on_control"
 #define NQ_SYM_CROSS_DESCRIBE "nq_cross_describe"

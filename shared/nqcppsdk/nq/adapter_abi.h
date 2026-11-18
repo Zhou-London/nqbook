@@ -31,6 +31,7 @@ typedef const nq_adapter_schema* (*nq_adapter_describe_fn)(void);
 typedef void* (*nq_adapter_init_fn)(const nq_params* params);
 typedef int (*nq_adapter_next_fn)(void* state, nq_mbo* out);
 typedef int (*nq_adapter_next_ohlcv_fn)(void* state, nq_ohlcv* out);
+typedef int (*nq_adapter_warmup_fn)(void* state, nq_ohlcv* out);
 typedef int (*nq_adapter_instrument_fn)(void* state, uint32_t id, nq_instrument* out);
 typedef void (*nq_adapter_destroy_fn)(void* state);
 
@@ -38,6 +39,7 @@ typedef void (*nq_adapter_destroy_fn)(void* state);
 #define NQ_SYM_ADAPTER_INIT "nq_adapter_init"
 #define NQ_SYM_ADAPTER_NEXT "nq_adapter_next"
 #define NQ_SYM_ADAPTER_NEXT_OHLCV "nq_adapter_next_ohlcv"
+#define NQ_SYM_ADAPTER_WARMUP "nq_adapter_warmup"
 #define NQ_SYM_ADAPTER_INSTRUMENT "nq_adapter_instrument"
 #define NQ_SYM_ADAPTER_DESTROY "nq_adapter_destroy"
 

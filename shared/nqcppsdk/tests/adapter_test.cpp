@@ -37,6 +37,16 @@ static int TestSandbox() {
     nq::testing::AdapterSandbox<nq_test::Synthetic> partial(two.Build());
     CHECK(partial.Drain(4).size() == 4 && partial.LastStatus() == nq::Next::Event);
     CHECK(partial.Drain().size() == 5 && partial.LastStatus() == nq::Next::End);
+
+    nq::ParamsBuilder warm;
+    warm.Set("count", "2").Set("instruments", "2").Set("warmup", "3");
+    nq::testing::AdapterSandbox<nq_test::Synthetic> warmed(warm.Build());
+    const auto bars = warmed.DrainWarmup();
+    CHECK(warmed.LastStatus() == nq::Next::End && bars.size() == 3);
+    CHECK(bars[0].ts == -3 && bars[0].instrument == 1 && bars[0].close == 101);
+    CHECK(bars[2].ts == -1 && bars[2].instrument == 1 && bars[1].instrument == 2);
+    CHECK(warmed.DrainWarmup().empty());
+    CHECK(warmed.Drain().size() == 2 && sb.DrainWarmup().empty());
     return 0;
 }
 
@@ -73,6 +83,15 @@ static int TestPlugin() {
     }
     CHECK(events == 3 && again >= 1);
     CHECK(inst.Next(m) == NQ_NEXT_END);
+
+    nq_ohlcv bar;
+    CHECK(plugin.Fns().warmup != nullptr && inst.Warmup(bar) == NQ_NEXT_END);
+    nq::ParamsBuilder warm;
+    warm.Set("count", "1").Set("warmup", "2");
+    nq::host::AdapterInstance warmed = plugin.Create(*warm.Build());
+    CHECK(warmed.Warmup(bar) == NQ_NEXT_EVENT && bar.ts == -2 && bar.instrument == 1);
+    CHECK(warmed.Warmup(bar) == NQ_NEXT_EVENT && bar.close == 102);
+    CHECK(warmed.Warmup(bar) == NQ_NEXT_END && warmed.Next(m) == NQ_NEXT_EVENT);
 
     nq::ParamsBuilder bad;
     bool threw = false;
@@ -126,6 +145,7 @@ static int TestOhlcvPlugin() {
         ++events;
     }
     CHECK(events == 3 && inst.Next(ohlcv) == NQ_NEXT_END);
+    CHECK(inst.Warmup(ohlcv) == NQ_NEXT_END);
     return 0;
 }
 

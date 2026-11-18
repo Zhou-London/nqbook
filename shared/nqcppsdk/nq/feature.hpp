@@ -101,6 +101,7 @@ constexpr std::array<Column, N> MakeColumns(const ColumnDef (&cols)[N]) {
 struct FeatureBase {
     void OnEvent(const Event&, const BookView&) noexcept {}
     void OnOhlcv(const Ohlcv&) noexcept {}
+    void OnWarmup(const Ohlcv&) noexcept {}
     void OnControl(const Control&) noexcept {}
     void BindCross(CrossRow) noexcept {}
 };
@@ -110,9 +111,10 @@ namespace detail {
 template <class F>
 concept FeatureCore =
     std::is_constructible_v<F, const Params&> &&
-    requires(F& f, const Control& c) {
+    requires(F& f, const Control& c, const Ohlcv& warmup) {
         { F::kColumns.size() } -> std::convertible_to<std::size_t>;
         { f.OnControl(c) } noexcept;
+        { f.OnWarmup(warmup) } noexcept;
     };
 
 }  // namespace detail
@@ -212,6 +214,10 @@ public:
             features_);
     }
 
+    void OnWarmup(const Ohlcv& ohlcv) noexcept {
+        std::apply([&](auto&... f) { (f.OnWarmup(ohlcv), ...); }, features_);
+    }
+
     void OnControl(const Control& c) noexcept {
         std::apply([&](auto&... f) { (f.OnControl(c), ...); }, features_);
     }
@@ -252,6 +258,9 @@ private:
     NQ_EXPORT void nq_destroy(void* s) { delete static_cast<nq_plugin_bundle_t*>(s); }       \
     NQ_EXPORT void nq_on_control(void* s, const nq_control* c) {                             \
         static_cast<nq_plugin_bundle_t*>(s)->OnControl(::nq::Control(*c));                   \
+    }                                                                                        \
+    NQ_EXPORT void nq_on_warmup(void* s, const nq_ohlcv* ohlcv) {                            \
+        static_cast<nq_plugin_bundle_t*>(s)->OnWarmup(*ohlcv);                               \
     }                                                                                        \
     }
 

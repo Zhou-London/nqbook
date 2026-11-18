@@ -21,6 +21,7 @@ struct AdapterFns {
     nq_adapter_init_fn init = nullptr;
     nq_adapter_next_fn next = nullptr;
     nq_adapter_next_ohlcv_fn next_ohlcv = nullptr;
+    nq_adapter_warmup_fn warmup = nullptr;
     nq_adapter_instrument_fn instrument = nullptr;
     nq_adapter_destroy_fn destroy = nullptr;
 };
@@ -52,6 +53,7 @@ public:
 
     int Next(nq_mbo& out) noexcept { return fns_.next(state_, &out); }
     int Next(nq_ohlcv& out) noexcept { return fns_.next_ohlcv(state_, &out); }
+    int Warmup(nq_ohlcv& out) noexcept { return fns_.warmup ? fns_.warmup(state_, &out) : NQ_NEXT_END; }
 
     std::optional<nq_instrument> Instrument(std::uint32_t id) const noexcept {
         nq_instrument out;
@@ -84,6 +86,7 @@ public:
             fns_.init = Resolve<nq_adapter_init_fn>(NQ_SYM_ADAPTER_INIT);
             fns_.instrument = Resolve<nq_adapter_instrument_fn>(NQ_SYM_ADAPTER_INSTRUMENT);
             fns_.destroy = Resolve<nq_adapter_destroy_fn>(NQ_SYM_ADAPTER_DESTROY);
+            fns_.warmup = Find<nq_adapter_warmup_fn>(NQ_SYM_ADAPTER_WARMUP);
             schema_ = fns_.describe();
             if (!schema_) throw PluginLoadError("nq_adapter_describe returned null: " + path);
             if (schema_->abi_hash != NQ_ADAPTER_ABI_HASH) {
@@ -140,6 +143,11 @@ public:
     }
 
 private:
+    template <class Fn>
+    Fn Find(const char* name) const noexcept {
+        return reinterpret_cast<Fn>(::dlsym(handle_, name));
+    }
+
     template <class Fn>
     Fn Resolve(const char* name) const {
         void* sym = ::dlsym(handle_, name);

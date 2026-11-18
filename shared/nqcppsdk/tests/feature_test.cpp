@@ -55,6 +55,29 @@ static int TestSandbox() {
     return 0;
 }
 
+static int TestWarmupSandbox() {
+    nq::ParamsBuilder pb;
+    pb.PriceScale(100);
+    nq::testing::Sandbox<nq_test::TradeVolume, nq_test::PriorClose> sb(pb.Build());
+    auto v = sb.Read();
+    CHECK(std::isnan(v[3]) && v[4] == 0);
+
+    const nq_ohlcv days[] = {MakeOhlcv(-2, 10000, 10250, 9900, 10100, 1.5), MakeOhlcv(-1, 10100, 10300, 10000, 10200, 2.0)};
+    sb.Warmup(days);
+    sb.Feed(Trade(1, 9, Side::Ask, 10070, 30, 30));
+    v = sb.Read();
+    CHECK(v[2] == 1 && Near(v[3], 102.0) && v[4] == 2);
+
+    sb.Control(nq::ControlType::Reset, 2);
+    v = sb.Read();
+    CHECK(v[2] == 0 && Near(v[3], 102.0) && v[4] == 2);
+
+    nq::testing::Sandbox<nq_test::Candle> bars(pb.Build());
+    bars.Warmup(days[0]);
+    CHECK(std::isnan(bars.Read()[0]));
+    return 0;
+}
+
 static int TestPlugin() {
     nq::host::Plugin plugin(NQ_TEST_PLUGIN_PATH);
     const nq_schema& s = plugin.Schema();
@@ -62,7 +85,8 @@ static int TestPlugin() {
     CHECK(std::strcmp(s.sdk_version, NQ_SDK_VERSION) == 0);
     CHECK(s.requirement == NQ_REQUIRES_MBO && s.feed == NQ_FEED_MBO);
     CHECK(plugin.Fns().on_event != nullptr && plugin.Fns().on_ohlcv == nullptr);
-    CHECK(s.ncol == 5);
+    CHECK(plugin.Fns().on_warmup != nullptr);
+    CHECK(s.ncol == 7);
     CHECK(std::strcmp(plugin.Columns()[0].name, "spread") == 0);
     CHECK(std::strcmp(plugin.Columns()[4].name, "trades") == 0);
     CHECK(std::strcmp(plugin.Columns()[4].unit, "count") == 0);
@@ -72,14 +96,18 @@ static int TestPlugin() {
     nq::ParamsBuilder pb;
     pb.Symbol("TEST").PriceScale(100).QtyScale(10);
     nq::host::PluginInstance inst = plugin.Create(*pb.Build());
-    CHECK(inst.Ncol() == 5);
+    CHECK(inst.Ncol() == 7);
 
     nq::testing::MockBook book;
     book.SetBids({{10050, 70, 2}}).SetAsks({{10070, 30, 1}});
 
-    std::vector<double> out(5);
+    std::vector<double> out(7);
     inst.Read(out, book.Raw());
-    CHECK(Near(out[0], 0.20) && Near(out[1], 100.60) && out[4] == 0);
+    CHECK(Near(out[0], 0.20) && Near(out[1], 100.60) && out[4] == 0 && std::isnan(out[5]) && out[6] == 0);
+
+    inst.OnWarmup(MakeOhlcv(-1, 10100, 10300, 10000, 10200, 2.0));
+    inst.Read(out, book.Raw());
+    CHECK(Near(out[5], 102.0) && out[6] == 1 && out[4] == 0);
 
     inst.OnEvent(Trade(2, 9, Side::Ask, 10070, 30, 30), *book.Raw());
     inst.OnEvent(Trade(3, 1, Side::Bid, 10050, 3, 3), *book.Raw());
@@ -159,6 +187,7 @@ static int TestOhlcvPlugin() {
 
 int main() {
     if (int r = TestSandbox()) return r;
+    if (int r = TestWarmupSandbox()) return r;
     if (int r = TestPlugin()) return r;
     if (int r = TestOhlcvSandbox()) return r;
     if (int r = TestOhlcvPlugin()) return r;

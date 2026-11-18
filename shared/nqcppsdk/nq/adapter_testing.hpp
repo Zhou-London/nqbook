@@ -40,6 +40,17 @@ public:
         return out;
     }
 
+    std::vector<Ohlcv> DrainWarmup() {
+        std::vector<Ohlcv> out;
+        Ohlcv bar{};
+        for (;;) {
+            last_ = adapter_.Warmup(bar);
+            if (last_ == Next::Event) out.push_back(bar);
+            else if (last_ != Next::Again) break;
+        }
+        return out;
+    }
+
     Next LastStatus() const noexcept { return last_; }
 
 private:
