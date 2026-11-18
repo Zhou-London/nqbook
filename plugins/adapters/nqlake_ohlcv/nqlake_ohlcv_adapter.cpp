@@ -1,11 +1,14 @@
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include <arrow/api.h>
@@ -26,11 +29,14 @@ public:
     static constexpr std::int64_t kUndefinedLakePrice = std::numeric_limits<std::int64_t>::max();
     static constexpr std::int64_t kMaxLakePrice = kUndefinedLakePrice / kPriceFactor;
     static_assert(kMaxLakePrice < kUndefinedLakePrice);
+    static constexpr std::int64_t kBeforeAnyBar = std::numeric_limits<std::int64_t>::min();
+    static constexpr std::int64_t kAfterEveryBar = std::numeric_limits<std::int64_t>::max();
 
     explicit LakeOhlcv(const nq::Params& p)
         : path_(LakePath()),
           max_jump_(p.GetDouble("max_jump", 50.0)),
-          reanchor_bars_(p.GetInt("reanchor_bars", 3)) {
+          reanchor_bars_(p.GetInt("reanchor_bars", 3)),
+          warmup_until_(WarmupUntil(p.Get("warmup_until"))) {
         if (!(max_jump_ > 1.0)) Fail("max_jump must be above 1");
         if (reanchor_bars_ < 1) Fail("reanchor_bars must be at least 1");
         file_ = Unwrap(arrow::io::MemoryMappedFile::Open(path_, arrow::io::FileMode::READ));
@@ -45,8 +51,18 @@ public:
         }
     }
 
-    nq::Next Next(nq::Ohlcv& out) {
-        while (SeekRow()) {
+    nq::Next Warmup(nq::Ohlcv& out) { return NextBefore(warmup_until_, out); }
+
+    nq::Next Next(nq::Ohlcv& out) { return NextBefore(kAfterEveryBar, out); }
+
+    const nq::Instrument* FindInstrument(std::uint32_t id) const noexcept {
+        const auto it = tracked_.find(id);
+        return it == tracked_.end() ? nullptr : &it->second.instrument;
+    }
+
+private:
+    nq::Next NextBefore(std::int64_t end_ts, nq::Ohlcv& out) {
+        while (SeekRow() && columns_.ts[row_] < end_ts) {
             const std::int64_t i = row_++;
             const LakeBar bar = columns_.Bar(i);
             if (!bar.Valid()) {
@@ -75,12 +91,6 @@ public:
         return nq::Next::End;
     }
 
-    const nq::Instrument* FindInstrument(std::uint32_t id) const noexcept {
-        const auto it = tracked_.find(id);
-        return it == tracked_.end() ? nullptr : &it->second.instrument;
-    }
-
-private:
     static bool ValidPrice(std::int64_t price) noexcept { return price > 0 && price <= kMaxLakePrice; }
 
     struct LakeBar {
@@ -168,6 +178,21 @@ private:
         return std::move(result).ValueUnsafe();
     }
 
+    static std::int64_t WarmupUntil(std::optional<std::string_view> date) {
+        if (!date) return kBeforeAnyBar;
+        int year = 0;
+        unsigned month = 0;
+        unsigned day = 0;
+        char extra = 0;
+        const std::string text(*date);
+        const std::chrono::year_month_day ymd =
+            std::sscanf(text.c_str(), "%4d-%2u-%2u%c", &year, &month, &day, &extra) == 3
+                ? std::chrono::year{year} / month / day
+                : std::chrono::year_month_day{};
+        if (!ymd.ok()) Fail("warmup_until must be a date like 2026-06-01: " + text);
+        return std::chrono::nanoseconds(std::chrono::sys_days{ymd}.time_since_epoch()).count();
+    }
+
     static std::string LakePath() {
         const char* home = std::getenv("HOME");
         if (!home) Fail("HOME is not set");
@@ -215,6 +240,7 @@ private:
     int next_batch_ = 0;
     double max_jump_;
     std::int64_t reanchor_bars_;
+    std::int64_t warmup_until_;
     std::unordered_map<std::uint32_t, Tracked> tracked_;
     std::int64_t skipped_ = 0;
     std::int64_t jumps_ = 0;

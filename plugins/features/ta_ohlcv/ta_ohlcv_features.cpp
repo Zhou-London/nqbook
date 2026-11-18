@@ -236,6 +236,8 @@ public:
         close_ = close;
     }
 
+    void OnWarmup(const nq::Ohlcv& ohlcv) noexcept { OnOhlcv(ohlcv); }
+
     void Read(std::span<double> out) const noexcept {
         out[0] = ret_;
         out[1] = gap_;

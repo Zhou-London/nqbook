@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -26,6 +27,7 @@ public:
     AdapterEngine& operator=(const AdapterEngine&) = delete;
 
     /* ---------- Member Functions ---------- */
+    void Warmup(const std::atomic<bool>& stop, const std::function<void(const nq_ohlcv&)>& on_bar);
     void Start();
     void Stop() noexcept;
     std::optional<Instrument> FindInstrument(std::uint32_t id) const;
@@ -39,6 +41,7 @@ public:
 private:
     /* ---------- Internal Functions ---------- */
     void Run(std::stop_token st);
+    void End(int rc) noexcept;
     void Discover(std::uint32_t id);
     bool Push(Record record, const std::stop_token& st) noexcept;
 

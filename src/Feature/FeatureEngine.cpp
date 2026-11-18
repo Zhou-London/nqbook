@@ -78,6 +78,16 @@ void FeatureEngine::OnOhlcv(const nq_ohlcv& ohlcv) {
     NotifySamplers(ohlcv.ts, false);
 }
 
+void FeatureEngine::OnWarmup(const nq_ohlcv& ohlcv) noexcept {
+    values_epoch_ = kStale;
+    for (auto& inst : instances_) inst.OnWarmup(ohlcv);
+}
+
+void FeatureEngine::FinishWarmup() {
+    const std::span<const double> warmed = ReadAll();
+    for (auto& s : samplers_) s.ResetBaseline(warmed);
+}
+
 void FeatureEngine::NotifySamplers(std::int64_t ts, bool is_trade) {
     for (auto& s : samplers_) s.OnEvent(ts, is_trade, [this] { return ReadAll(); });
 }

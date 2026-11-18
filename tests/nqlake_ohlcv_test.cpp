@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -68,17 +69,31 @@ std::int64_t L(double price) { return Scaled(price, kLakeScale); }
 
 }  // namespace
 
-static std::vector<nq_ohlcv> BarsEmittedByAdapter(const std::vector<Bar>& lake_bars, nq::ParamsBuilder pb = {}) {
+struct Emitted {
+    std::vector<nq_ohlcv> warmup;
+    std::vector<nq_ohlcv> live;
+};
+
+static std::optional<Emitted> RunAdapter(const std::vector<Bar>& lake_bars, nq::ParamsBuilder pb = {}) {
     const fs::path home = fs::temp_directory_path() / ("nqlake_ohlcv_test_" + std::to_string(::getpid()));
     WriteLake(home / ".nqlake" / "mmap.arrow", lake_bars);
     ::setenv("HOME", home.c_str(), 1);
     nq::host::AdapterPlugin plugin(NQ_LAKE_OHLCV_ADAPTER_PATH);
-    auto adapter = plugin.Create(*pb.Build());
-    std::vector<nq_ohlcv> got;
-    nq_ohlcv bar{};
-    while (adapter.Next(bar) == NQ_NEXT_EVENT) got.push_back(bar);
+    std::optional<Emitted> got;
+    try {
+        auto adapter = plugin.Create(*pb.Build());
+        got.emplace();
+        nq_ohlcv bar{};
+        while (adapter.Warmup(bar) == NQ_NEXT_EVENT) got->warmup.push_back(bar);
+        while (adapter.Next(bar) == NQ_NEXT_EVENT) got->live.push_back(bar);
+    } catch (const nq::host::PluginInitError&) {
+    }
     fs::remove_all(home);
     return got;
+}
+
+static std::vector<nq_ohlcv> BarsEmittedByAdapter(const std::vector<Bar>& lake_bars, nq::ParamsBuilder pb = {}) {
+    return RunAdapter(lake_bars, std::move(pb)).value().live;
 }
 
 static Bar Flat(std::int64_t ts, double price, std::int64_t instrument = 7) {
@@ -153,7 +168,29 @@ static int TestInstrumentsAreIndependent() {
     return 0;
 }
 
+static int TestWarmupUntilSplitsBarsAtThatDay() {
+    constexpr std::int64_t kSecondDay = 24 * 3600 * kSec;
+    nq::ParamsBuilder from_second_day;
+    from_second_day.Set("warmup_until", "1970-01-02");
+    const auto got = RunAdapter({Flat(1, 100), Flat(2, 1), Flat(kSecondDay - 1, 101), Flat(kSecondDay, 102),
+                                 Flat(kSecondDay + 1, 103)},
+                                from_second_day);
+    CHECK((Times(got->warmup) == std::vector<std::int64_t>{1, kSecondDay - 1}));
+    CHECK((Times(got->live) == std::vector<std::int64_t>{kSecondDay, kSecondDay + 1}));
+
+    const auto no_warmup = RunAdapter({Flat(1, 100), Flat(kSecondDay, 102)});
+    CHECK(no_warmup->warmup.empty() && no_warmup->live.size() == 2);
+
+    for (const char* bad : {"1970-13-01", "19700102", "1970-01-02T00", ""}) {
+        nq::ParamsBuilder rejected;
+        rejected.Set("warmup_until", bad);
+        CHECK(!RunAdapter({Flat(1, 100)}, rejected));
+    }
+    return 0;
+}
+
 int main() {
+    if (int r = TestWarmupUntilSplitsBarsAtThatDay()) return r;
     if (int r = TestSkipsInvalidBars()) return r;
     if (int r = TestDropsBadPrintAndKeepsLastAcceptedClose()) return r;
     if (int r = TestDropsBarWhoseHighAloneIsFar()) return r;

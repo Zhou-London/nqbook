@@ -15,6 +15,8 @@ nqhpc_define_binary_path(nqhpc_tests INTERFACE NQ_EXAMPLE_OHLCV_FEATURES_PATH ex
 nqhpc_define_binary_path(nqhpc_tests INTERFACE NQ_SYNTHETIC_OHLCV_ADAPTER_PATH synthetic_ohlcv)
 nqhpc_define_binary_path(nqhpc_tests INTERFACE NQ_TA_OHLCV_PATH ta_ohlcv)
 nqhpc_define_binary_path(nqhpc_tests INTERFACE NQ_EXAMPLE_CROSS_FEATURES_PATH example_cross_features)
+nq_add_plugin(warmup_features warmup_features.cpp)
+nqhpc_define_binary_path(nqhpc_tests INTERFACE NQ_WARMUP_FEATURES_PATH warmup_features)
 
 function(nqhpc_add_test name)
     add_executable(${name} ${ARGN})
@@ -33,6 +35,9 @@ nqhpc_add_test(adapter_engine_test adapter_engine_test.cpp)
 nqhpc_add_test(nqlake_ohlcv_test nqlake_ohlcv_test.cpp)
 nqhpc_define_binary_path(nqlake_ohlcv_test PRIVATE NQ_LAKE_OHLCV_ADAPTER_PATH nqlake_ohlcv)
 nqhpc_add_test(writer_test writer_test.cpp)
+nqhpc_add_test(warmup_test warmup_test.cpp)
+nq_add_plugin(flaky_warmup_adapter flaky_warmup_adapter.cpp)
+nqhpc_define_binary_path(warmup_test PRIVATE NQ_FLAKY_WARMUP_ADAPTER_PATH flaky_warmup_adapter)
 nqhpc_add_test(cross_test cross_test.cpp)
 
 add_executable(cross_bench cross_bench.cpp)

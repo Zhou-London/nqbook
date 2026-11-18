@@ -38,6 +38,7 @@ struct InstrumentStats : EventStats {
 
 struct FeedStats : EventStats {
     std::uint64_t instrument_unknown = 0;
+    std::uint64_t warmup_bars = 0;
 };
 
 template <class Record>
@@ -57,6 +58,8 @@ public:
     PipelineTable(const PipelineTable&) = delete;
     PipelineTable& operator=(const PipelineTable&) = delete;
 
+    void Warmup(const nq_ohlcv& bar);
+    void FinishWarmup();
     void Apply(const Record& record);
     std::size_t Consume(nlib::single_queue<Record>& q, std::size_t max = std::numeric_limits<std::size_t>::max());
     void Close();

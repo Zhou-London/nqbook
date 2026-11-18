@@ -278,6 +278,26 @@ static int TestOhlcvCli(const fs::path& tmp) {
     return 0;
 }
 
+static int TestWarmupCli(const fs::path& tmp) {
+    const std::string adapter = "--adapter " + Quote(NQ_SYNTHETIC_ADAPTER_PATH) +
+                                " --adapter-param count=4 --adapter-param instruments=2 --adapter-param warmup=3";
+    const fs::path csv = tmp / "warmup_csv";
+    Result r = Run("run " + adapter + " --plugin " + Quote(NQ_WARMUP_FEATURES_PATH) +
+                   " --sampler each=events:1 --out-format csv --out-dir " + Quote(csv), tmp);
+    CHECK(r.code == 0 && Has(r.err, "feed  events=4 instruments=2") && Has(r.err, "warmup_bars=3"));
+    const auto rows = Lines(csv / "each.csv");
+    CHECK(rows.size() == 5);
+    CHECK(rows[0] == "instrument,symbol,ts,warmup_features.bars,warmup_features.close,warmup_features.volume");
+    CHECK(rows[1] == "1,SYN1,1,2,103,0" && rows[2] == "1,SYN1,3,2,103,0");
+    CHECK(rows[3] == "2,SYN2,2,1,102,0");
+
+    r = Run("check-feed --adapter " + Quote(NQ_SYNTHETIC_OHLCV_ADAPTER_PATH) +
+            " --adapter-param count=10 --adapter-param instruments=2 --adapter-param warmup=4", tmp);
+    CHECK(r.code == 0 && Has(r.err, "feed  events=6 instruments=2") && Has(r.err, "warmup_bars=4"));
+    CHECK(Has(r.err, "first_ts=120000000000"));
+    return 0;
+}
+
 int main() {
     const fs::path tmp = fs::temp_directory_path() / "nqhpc_cli_test";
     fs::remove_all(tmp);
@@ -287,6 +307,7 @@ int main() {
     if (int rc = TestCli(tmp)) return rc;
     if (int rc = TestRunCli(tmp)) return rc;
     if (int rc = TestOhlcvCli(tmp)) return rc;
+    if (int rc = TestWarmupCli(tmp)) return rc;
     fs::remove_all(tmp);
     std::printf("ok\n");
     return 0;

@@ -30,7 +30,9 @@ template <class Record>
 RunResult Session<Record>::Run(const std::atomic<bool>& stop) {
     RunResult result;
     
-    adapter_.Start();
+    adapter_.Warmup(stop, [this](const nq_ohlcv& bar) { table_.Warmup(bar); });
+    table_.FinishWarmup();
+    if (!adapter_.Ended()) adapter_.Start();
     
     nlib::single_queue<Record>& q = adapter_.Queue();
     for (;;) {

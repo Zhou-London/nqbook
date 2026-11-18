@@ -39,6 +39,17 @@ typename PipelineTable<Record>::Entry& PipelineTable<Record>::Resolve(std::uint3
 }
 
 template <class Record>
+void PipelineTable<Record>::Warmup(const nq_ohlcv& bar) {
+    Resolve(bar.instrument).pipeline->Engine().OnWarmup(bar);
+    ++stats_.warmup_bars;
+}
+
+template <class Record>
+void PipelineTable<Record>::FinishWarmup() {
+    for (FeatureEngine* engine : engines_) engine->FinishWarmup();
+}
+
+template <class Record>
 void PipelineTable<Record>::Apply(const Record& record) {
     Entry& e = Resolve(record.instrument);
 

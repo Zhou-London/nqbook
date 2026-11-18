@@ -15,14 +15,26 @@ public:
         : count_(p.RequireInt("count")),
           instruments_(p.GetInt("instruments", 1)),
           period_ns_(p.GetInt("period_ns", kMinuteNs)),
+          warmup_bars_(p.GetInt("warmup", 0)),
           price_scale_(p.PriceScale()) {
         for (std::int64_t i = 0; i < instruments_; ++i) {
             table_.push_back(nq::Instrument{static_cast<std::uint32_t>(i + 1), "SYN" + std::to_string(i + 1), 10, 1});
         }
     }
 
-    nq::Next Next(nq::Ohlcv& out) {
-        if (next_ >= count_) return nq::Next::End;
+    nq::Next Warmup(nq::Ohlcv& out) { return next_ < warmup_bars_ ? Emit(out) : nq::Next::End; }
+
+    nq::Next Next(nq::Ohlcv& out) { return next_ < count_ ? Emit(out) : nq::Next::End; }
+
+    const nq::Instrument* FindInstrument(std::uint32_t id) const noexcept {
+        for (const auto& i : table_) {
+            if (i.id == id) return &i;
+        }
+        return nullptr;
+    }
+
+private:
+    nq::Next Emit(nq::Ohlcv& out) noexcept {
         const std::int64_t i = next_++;
         const std::int64_t period_index = i / instruments_;
         const std::int64_t instrument_index = i % instruments_;
@@ -36,17 +48,10 @@ public:
         return nq::Next::Event;
     }
 
-    const nq::Instrument* FindInstrument(std::uint32_t id) const noexcept {
-        for (const auto& i : table_) {
-            if (i.id == id) return &i;
-        }
-        return nullptr;
-    }
-
-private:
     std::int64_t count_;
     std::int64_t instruments_;
     std::int64_t period_ns_;
+    std::int64_t warmup_bars_;
     std::int64_t price_scale_;
     std::int64_t next_ = 0;
     std::vector<nq::Instrument> table_;

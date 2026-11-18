@@ -27,6 +27,8 @@ public:
     std::int64_t Due() const noexcept;
     void OnEvent(const nq_mbo& m, nlib::qty_t filled);
     void OnOhlcv(const nq_ohlcv& ohlcv);
+    void OnWarmup(const nq_ohlcv& ohlcv) noexcept;
+    void FinishWarmup();
     void Close();
 
     std::span<const double> ReadAll();

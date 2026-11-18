@@ -9,6 +9,27 @@ AdapterEngine<Record>::AdapterEngine(host::AdapterInstance adapter, std::size_t 
     : adapter_(std::move(adapter)), queue_(queue_capacity) {}
 
 template <class Record>
+void AdapterEngine<Record>::Warmup(const std::atomic<bool>& stop, const std::function<void(const nq_ohlcv&)>& on_bar) {
+    nq_ohlcv bar;
+
+    while (!stop.load(std::memory_order_relaxed)) {
+        const int rc = adapter_.Warmup(bar);
+        if (rc == NQ_NEXT_EVENT) {
+            Discover(bar.instrument);
+            on_bar(bar);
+            continue;
+        }
+        if (rc == NQ_NEXT_AGAIN) {
+            std::this_thread::yield();
+            continue;
+        }
+
+        if (rc != NQ_NEXT_END) End(rc);
+        return;
+    }
+}
+
+template <class Record>
 void AdapterEngine<Record>::Start() {
     thread_ = std::jthread([this](std::stop_token st) { Run(st); });
 }
@@ -72,10 +93,15 @@ void AdapterEngine<Record>::Run(std::stop_token st) {
             continue;
         }
         
-        status_.store(rc == NQ_NEXT_END ? 0 : rc, std::memory_order_relaxed);
-        ended_.store(true, std::memory_order_release);
+        End(rc);
         return;
     }
+}
+
+template <class Record>
+void AdapterEngine<Record>::End(int rc) noexcept {
+    status_.store(rc == NQ_NEXT_END ? 0 : rc, std::memory_order_relaxed);
+    ended_.store(true, std::memory_order_release);
 }
 
 template class AdapterEngine<nq_mbo>;

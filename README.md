@@ -70,7 +70,7 @@ AdapterEngine          Session::Run                         WriterEngine
 - `AdapterEngine`, `PipelineTable`, `Pipeline`, and `Session` are templates over the record type: `nq_mbo` or `nq_ohlcv`.
 - `PipelineTable` maps each instrument id to a `Pipeline`. An MBO `Pipeline` holds an `Orderbook` and a `FeatureEngine`. An OHLCV `Pipeline` holds a `FeatureEngine` only.
 - `Orderbook` keeps pooled orders in price levels and reduces resting orders on trades.
-- `FeatureEngine` calls the feature plugins on each record and passes their values to the samplers.
+- `FeatureEngine` calls the feature plugins on each record and passes their values to the samplers. It hands warm-up bars to the plugins only.
 - `WriterEngine` writes one Parquet file per table (sampler or cross), plus `instruments.parquet`. Each row holds the instrument id and its symbol.
 
 Sampling has three layers. Each layer uses only the layer below it.
@@ -106,6 +106,19 @@ build/nqhpc run --adapter build/plugins/adapters/nqlake_ohlcv.so \
                 --plugin build/plugins/features/ta_ohlcv.so \
                 --sampler 1h=time:1h --cross xs=ta_ohlcv:1h
 ```
+
+Warm-up fills feature state before the feed starts. An adapter may send OHLCV bars ahead of its first record, and `PipelineTable` hands each bar to the features of its instrument. A warm-up bar moves no clock and writes no row. Cumulative columns count from the end of warm-up. The feed report shows the number as `warmup_bars`.
+
+`nqlake_ohlcv` sends the bars before `warmup_until` as warm-up bars, and `ta_ohlcv` reads a warm-up bar like a feed record. This run writes rows from 2026-06-01 on, with every indicator already warm:
+
+```bash
+build/nqhpc run --adapter build/plugins/adapters/nqlake_ohlcv.so \
+                --adapter-param warmup_until=2026-06-01 \
+                --plugin build/plugins/features/ta_ohlcv.so \
+                --sampler 1h=time:1h
+```
+
+Both synthetic adapters take `warmup=N` to send `N` warm-up bars.
 
 The members of a boundary are the instruments with a bar since the last boundary and a value for the feature. A feature with fewer than `cross_min` members, 20 by default, gets NaN rank and z. `cross_min` is set in `ta_ohlcv.params` beside the `.so`.
 

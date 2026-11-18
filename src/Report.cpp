@@ -93,8 +93,8 @@ void PrintBookStats(std::FILE* out, const Orderbook::Stats& s) {
 template <class Record>
 void PrintFeedSummary(std::FILE* out, const PipelineTable<Record>& table, const RunResult& result) {
     const FeedStats& f = table.Stats();
-    std::fprintf(out, "feed  events=%" PRIu64 " instruments=%zu ts_regressions=%" PRIu64 " instrument_unknown=%" PRIu64 " stalls=%" PRIu64 " first_ts=%" PRId64 " last_ts=%" PRId64 " adapter_status=%d%s\n",
-                 f.events, table.InstrumentCount(), f.ts_regressions, f.instrument_unknown, result.stalls, f.first_ts,
+    std::fprintf(out, "feed  events=%" PRIu64 " instruments=%zu ts_regressions=%" PRIu64 " instrument_unknown=%" PRIu64 " stalls=%" PRIu64 " warmup_bars=%" PRIu64 " first_ts=%" PRId64 " last_ts=%" PRId64 " adapter_status=%d%s\n",
+                 f.events, table.InstrumentCount(), f.ts_regressions, f.instrument_unknown, result.stalls, f.warmup_bars, f.first_ts,
                  f.last_ts, result.adapter_status, result.interrupted ? " interrupted" : "");
 
     if (result.writer) {
