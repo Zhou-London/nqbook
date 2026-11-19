@@ -109,14 +109,7 @@ build/nqhpc run --adapter build/plugins/adapters/nqlake_ohlcv.so \
 
 Warm-up fills feature state before the feed starts. An adapter may send OHLCV bars ahead of its first record, and `PipelineTable` hands each bar to the features of its instrument. A warm-up bar moves no clock and writes no row. Cumulative columns count from the end of warm-up. The feed report shows the number as `warmup_bars`.
 
-`nqlake_ohlcv` sends the bars before `warmup_until` as warm-up bars, and `ta_ohlcv` reads a warm-up bar like a feed record. This run writes rows from 2026-06-01 on, with every indicator already warm:
-
-```bash
-build/nqhpc run --adapter build/plugins/adapters/nqlake_ohlcv.so \
-                --adapter-param warmup_until=2026-06-01 \
-                --plugin build/plugins/features/ta_ohlcv.so \
-                --sampler 1h=time:1h
-```
+`nqlake_ohlcv` sends the bars before `warmup_until` as warm-up bars. `ta_ohlcv` ignores warm-up bars. Its indicators start from the first feed record.
 
 Both synthetic adapters take `warmup=N` to send `N` warm-up bars.
 
